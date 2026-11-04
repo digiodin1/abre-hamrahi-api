@@ -102,6 +102,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         token = self.headers.get('X-Hamrahi-CSRF', '')
         if not self.allowed(require_origin=True) or not hmac.compare_digest(token, self.server.csrf):
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if 0 <= length <= MAX_BODY:
+                    self.rfile.read(length)
+            except (ValueError, OSError, TimeoutError):
+                pass
             self.reply(403, {'error': 'درخواست از پنل محلی تأیید نشد؛ صفحه را تازه کنید.'})
             return
         if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
