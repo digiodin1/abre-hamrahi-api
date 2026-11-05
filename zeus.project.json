@@ -1,0 +1,17 @@
+{
+  "name": "abr-hamrahi-api",
+  "owner": "internal",
+  "kind": "local-backup-panel",
+  "description": "Loopback-only local panel for versioned backups to Abrehamrahi",
+  "entrypoints": [
+    "src/hamrahi_backup/cli.py",
+    "src/hamrahi_backup/server.py"
+  ],
+  "apis": [
+    {
+      "name": "local-panel",
+      "port": 8765
+    }
+  ],
+  "startup": "manual"
+}
