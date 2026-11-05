@@ -41,7 +41,7 @@ class PanelTests(unittest.TestCase):
         if headers is None:
             headers = {
             'Content-Type': 'application/json', 'Origin': self.base,
-            'X-Hamrahi-CSRF': self.server.csrf,
+            'X-Abr-Hamrahi-CSRF': self.server.csrf,
             }
         return self.request(path, data, headers)
 
@@ -55,6 +55,9 @@ class PanelTests(unittest.TestCase):
                 self.assertEqual(int(headers['Content-Length']), len(body))
                 self.assertEqual(headers['Cache-Control'], 'no-store')
                 self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
+                self.assertEqual(headers['X-Frame-Options'], 'DENY')
+                self.assertEqual(headers['Cross-Origin-Resource-Policy'], 'same-origin')
+                self.assertEqual(headers['Permissions-Policy'], 'camera=(), microphone=(), geolocation=()')
                 self.assertIn("frame-ancestors 'none'", headers['Content-Security-Policy'])
                 self.assertNotIn('Access-Control-Allow-Origin', headers)
         state = json.loads(self.request('/api/backup')[2])
@@ -63,8 +66,8 @@ class PanelTests(unittest.TestCase):
 
     def test_cross_site_dns_rebinding_and_missing_csrf_rejected(self):
         good = {'Content-Type': 'application/json', 'Origin': self.base,
-                'X-Hamrahi-CSRF': self.server.csrf}
-        for headers in [{}, good | {'X-Hamrahi-CSRF': 'invalid-token'},
+            'X-Abr-Hamrahi-CSRF': self.server.csrf}
+        for headers in [{}, good | {'X-Abr-Hamrahi-CSRF': 'invalid-token'},
                         good | {'Origin': 'https://evil.example'},
                         good | {'Host': 'evil.example'},
                         good | {'Sec-Fetch-Site': 'cross-site'}]:
@@ -85,10 +88,10 @@ class PanelTests(unittest.TestCase):
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
         connection.request('POST', '/api/backup/config', body=b'', headers={
             'Content-Type': 'application/json', 'Origin': self.base,
-            'X-Hamrahi-CSRF': self.server.csrf, 'Content-Length': '65537'})
+            'X-Abr-Hamrahi-CSRF': self.server.csrf, 'Content-Length': '65537'})
         self.assertEqual(connection.getresponse().status, 413)
         connection.close()
-        headers = {'Content-Type': 'text/plain', 'Origin': self.base, 'X-Hamrahi-CSRF': self.server.csrf}
+        headers = {'Content-Type': 'text/plain', 'Origin': self.base, 'X-Abr-Hamrahi-CSRF': self.server.csrf}
         self.assertEqual(self.post(b'{}', headers)[0], 415)
         self.assertEqual(self.engine.public()['config'], before)
         self.assertEqual(self.post(b'{}', path='/api/backup/not-real')[0], 404)
@@ -105,3 +108,6 @@ class PanelTests(unittest.TestCase):
         self.assertTrue(self.engine.work_lock.acquire(timeout=5))
         self.engine.work_lock.release()
         self.assertEqual(self.engine.state['lastResult']['uploaded'], 1)
+
+    def test_server_is_bound_to_ipv4_loopback(self):
+        self.assertEqual(self.server.server_address[0], '127.0.0.1')

@@ -167,6 +167,13 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(cb.BackupError):
                 self.client.save_tokens(tokens)
 
+    def test_transfer_dns_changes_are_rejected(self):
+        public = [(None, None, None, None, ('93.184.216.34', 443))]
+        private = [(None, None, None, None, ('127.0.0.1', 443))]
+        with patch.object(cb.socket, 'getaddrinfo', side_effect=[public, private]):
+            with self.assertRaises(cb.BackupError):
+                cb.check_transfer_url('https://storage.example/x')
+
     def test_cli_version_does_not_access_account(self):
         with self.assertRaises(SystemExit) as result:
             main(['--version'])

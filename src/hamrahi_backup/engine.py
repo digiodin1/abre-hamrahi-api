@@ -30,7 +30,7 @@ import uuid
 API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = ['.git', 'node_modules', '.venv', 'venv', '__pycache__',
                     '*.tmp', '*.part', '*.lock', '*-wal', '*-shm', '.env', '.env.*',
-                    '*.pem', '*.key', 'credentials', '.backup', '.hamrahi-backup']
+                    '*.pem', '*.key', 'credentials', '.backup', '.abr-hamrahi-api']
 
 
 class BackupError(Exception):
@@ -118,8 +118,10 @@ def check_transfer_url(url):
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or not valid_port or parsed.fragment:
         raise BackupError('نشانی انتقال امن و معتبر نیست.')
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
-        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+        port = parsed.port or 443
+        first = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)}
+        second = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)}
+        if not first or first != second or any(not ipaddress.ip_address(address).is_global for address in first):
             raise BackupError('نشانی انتقال به شبکهٔ عمومی تعلق ندارد.')
     except OSError:
         raise BackupError('نام میزبان انتقال قابل دسترسی نیست.') from None
@@ -421,7 +423,7 @@ class BackupManager:
                       'uploaded': 0, 'skipped': 0, 'bytes': 0, 'errors': [], 'lastResult': None,
                       'connection': None, 'lastTest': None, 'nextRun': None}
         self.config_error = None
-        self.config = {'version': 1, 'remoteRoot': 'Hamrahi-Backup', 'intervalMinutes': 60,
+        self.config = {'version': 1, 'remoteRoot': 'Abr-Hamrahi-API', 'intervalMinutes': 60,
                        'automatic': False, 'maxFileMiB': 1024, 'settleSeconds': 15,
                        'verifyUploads': True, 'exclude': DEFAULT_EXCLUDES[:], 'folders': []}
         try:
@@ -454,7 +456,7 @@ class BackupManager:
             raise BackupError('تنظیمات باید یک شیء باشد.')
         if type(data.get('version', 1)) is not int or data.get('version', 1) != 1:
             raise BackupError('نسخهٔ تنظیمات پشتیبانی نمی‌شود؛ فایل اصلی حفظ شد.')
-        result = {'version': 1, 'remoteRoot': cloud_name(str(data.get('remoteRoot', 'Hamrahi-Backup')))}
+        result = {'version': 1, 'remoteRoot': cloud_name(str(data.get('remoteRoot', 'Abr-Hamrahi-API')))}
         for key, default, low, high in [('intervalMinutes', 60, 5, 10080), ('maxFileMiB', 1024, 1, 20480), ('settleSeconds', 15, 0, 3600)]:
             if type(data.get(key, default)) is not int:
                 raise BackupError('تنظیم عددی باید عدد صحیح باشد: ' + key)
@@ -777,7 +779,7 @@ class BackupManager:
     def test_roundtrip(self):
         self.update(phase='بررسی اتصال حساب')
         self.update(connection=self.client.connection())
-        content = ('Hamrahi Backup self-test\n' + now() + '\n' + uuid.uuid4().hex + '\n').encode()
+        content = ('Abr Hamrahi API self-test\n' + now() + '\n' + uuid.uuid4().hex + '\n').encode()
         digest = hashlib.sha256(content).hexdigest()
         with tempfile.TemporaryDirectory(prefix='selftest-', dir=self.state_dir) as staging:
             path = Path(staging) / 'test.txt'

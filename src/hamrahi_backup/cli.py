@@ -14,8 +14,8 @@ from .server import PanelServer
 
 def default_data_dir():
     if os.name == 'nt':
-        return Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) / 'HamrahiBackup'
-    return Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local' / 'state')) / 'hamrahi-backup'
+        return Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) / 'AbrHamrahiAPI'
+    return Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local' / 'state')) / 'abr-hamrahi-api'
 
 
 @contextmanager
@@ -58,7 +58,7 @@ def instance_lock(directory):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Hamrahi Backup: local versioned backup panel (experimental provider API).')
+    parser = argparse.ArgumentParser(description='Abr Hamrahi API: local versioned backup panel (experimental provider API).')
     parser.add_argument('--version', action='version', version=__version__)
     parser.add_argument('--port', type=int, default=8765, help='Loopback panel port (default: 8765)')
     parser.add_argument('--data-dir', type=Path, default=default_data_dir(), help='Private local settings/session directory')
@@ -74,7 +74,7 @@ def main(argv=None):
             scheduler = threading.Thread(target=manager.scheduler, daemon=True, name='backup-scheduler')
             scheduler.start()
             url = f'http://127.0.0.1:{server.server_port}/'
-            print(f'Hamrahi Backup {__version__}: {url}', flush=True)
+            print(f'Abr Hamrahi API {__version__}: {url}', flush=True)
             print('Keep this process running for scheduled backups. Press Ctrl+C to stop.', flush=True)
             if os.name != 'nt':
                 print('Account login requires Windows DPAPI; this platform supports offline preview/testing only.', flush=True)

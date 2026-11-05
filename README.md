@@ -1,6 +1,6 @@
-# Hamrahi Backup
+# Abr Hamrahi API
 
-Hamrahi Backup is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, creates a content-addressed filename, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
+Abr Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, creates a content-addressed filename, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
 The project is intentionally conservative:
 
@@ -9,6 +9,7 @@ The project is intentionally conservative:
 - SQLite files are copied through a read-only snapshot so committed WAL data is included.
 - Passwords and one-time codes are never written. The access and refresh session is encrypted with Windows DPAPI and kept in the private data directory.
 - The panel binds to `127.0.0.1` only, uses a per-process CSRF token, rejects cross-origin requests, and serves a fixed asset allowlist.
+- The API rejects non-loopback peers, sends browser isolation headers, and checks signed-transfer DNS twice to detect a changing destination.
 - Preview mode works without contacting the provider and is the recommended first run.
 
 ## Provider status
@@ -24,18 +25,20 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install .
-hamrahi-backup
+abr-hamrahi-api
 ```
 
-The command opens the local panel in your default browser. The process must remain running for scheduled work; the browser does not. Use `hamrahi-backup --no-browser` on a machine where you want to open the panel yourself. The default private state directory is `%LOCALAPPDATA%\HamrahiBackup`; it is outside the installed package.
+The command opens the local panel in your default browser. The process must remain running for scheduled work; the browser does not. Use `abr-hamrahi-api --no-browser` on a machine where you want to open the panel yourself. The default private state directory is `%LOCALAPPDATA%\AbrHamrahiAPI`; it is outside the installed package.
 
 For a portable or test directory:
 
 ```powershell
-hamrahi-backup --data-dir C:\HamrahiBackupState --port 8765
+abr-hamrahi-api --data-dir C:\AbrHamrahiAPIState --port 8765
 ```
 
 Only the loopback address is accepted. Do not expose the port through a firewall, reverse proxy, tunnel, or LAN binding.
+
+The provider cannot call this local API back into your computer. A process already running as your Windows user remains outside this tool’s protection boundary.
 
 ## First run
 
@@ -58,8 +61,8 @@ This project does not provide end-to-end encryption. The provider and its signed
 ## Development
 
 ```powershell
-git clone https://github.com/digiodin1/hamrahi-backup.git
-cd hamrahi-backup
+git clone https://github.com/digiodin1/abre-hamrahi-api.git
+cd abre-hamrahi-api
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 $env:PYTHONPATH = 'src'

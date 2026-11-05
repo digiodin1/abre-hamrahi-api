@@ -1,7 +1,8 @@
-"""Loopback-only panel. No filesystem routes, CORS, remote assets or request logs."""
+"""Loopback-only Abr Hamrahi API panel with no filesystem routes or request logs."""
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+import ipaddress
 import json
 import secrets
 import threading
@@ -54,7 +55,7 @@ class PanelServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'HamrahiBackup'
+    server_version = 'AbrHamrahiAPI'
     sys_version = ''
 
     def setup(self):
@@ -75,6 +76,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Security-Policy', CSP)
         self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
+        self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Connection', 'close')
         self.end_headers()
@@ -82,7 +86,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def allowed(self, require_origin=False):
-        return (len(self.headers.get_all('Host', [])) == 1
+        try:
+            loopback = ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            loopback = False
+        return (loopback
+                and len(self.headers.get_all('Host', [])) == 1
                 and self.headers.get('Host') in self.server.hosts
                 and (self.headers.get('Origin') in self.server.origins if require_origin
                      else self.headers.get('Origin', next(iter(self.server.origins))) in self.server.origins)
@@ -100,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, {'error': 'مسیر یافت نشد.'})
 
     def do_POST(self):
-        token = self.headers.get('X-Hamrahi-CSRF', '')
+        token = self.headers.get('X-Abr-Hamrahi-CSRF', '')
         if not self.allowed(require_origin=True) or not hmac.compare_digest(token, self.server.csrf):
             try:
                 length = int(self.headers.get('Content-Length', '0'))
