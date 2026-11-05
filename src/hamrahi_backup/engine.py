@@ -29,6 +29,7 @@ import urllib.request
 import uuid
 
 from .watcher import ChangeMonitor, relevant_path
+from .startup import StartupRegistration
 
 API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = ['.git', 'node_modules', '.venv', 'venv', '__pycache__',
@@ -222,7 +223,7 @@ class HamrahiClient:
             except (urllib.error.URLError, TimeoutError, OSError):
                 raise BackupError('ارتباط با ابرهمراهی برقرار نشد یا زمان درخواست تمام شد.', 502) from None
             except (ValueError, TypeError):
-                raise BackupError('پاسخ API قابل شناسایی نیست؛ اتصال آزمایشی نیاز به بررسی دارد.', 502) from None
+                raise BackupError('پاسخ API قابل شناسایی نیست؛ اتصال نیاز به بررسی دارد.', 502) from None
 
     def refresh(self):
         with self.lock:
@@ -412,11 +413,12 @@ def cloud_name(value):
 
 
 class BackupManager:
-    def __init__(self, base, client=None, state_dir=None):
+    def __init__(self, base, client=None, state_dir=None, port=8765):
         self.base = Path(base).resolve()
         self.state_dir = Path(state_dir).resolve() if state_dir else self.base / '.backup'
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.config_path = self.state_dir / 'config.json'
+        self.startup = StartupRegistration(self.state_dir, port)
         self.lock = threading.RLock()
         self.work_lock = threading.Lock()
         self.stop = threading.Event()
@@ -433,12 +435,12 @@ class BackupManager:
                       'uploaded': 0, 'skipped': 0, 'bytes': 0, 'errors': [], 'lastResult': None,
                       'connection': None, 'lastTest': None, 'nextRun': None, 'pendingSync': False,
                       'watching': 0, 'watchBackend': None, 'watchError': None, 'lastChange': None,
-                      'nextSync': None, 'trigger': None}
+                      'nextSync': None, 'trigger': None, 'runId': None, 'steps': [], 'fileStage': None}
         self.config_error = None
-        self.config = {'version': 1, 'remoteRoot': 'Abr-Hamrahi-API', 'intervalMinutes': 60,
+        self.config = {'version': 1, 'remoteRoot': cloud_name(socket.gethostname() or 'Computer'), 'intervalMinutes': 60,
                        'automatic': False, 'syncOnChange': True, 'automaticPaused': False,
                        'debounceSeconds': 5, 'maxFileMiB': 1024, 'settleSeconds': 15,
-                       'verifyUploads': True, 'exclude': DEFAULT_EXCLUDES[:], 'folders': []}
+                       'verifyUploads': True, 'startupEnabled': False, 'exclude': DEFAULT_EXCLUDES[:], 'folders': []}
         try:
             if self.config_path.exists():
                 self.config = self.validate_config(json.loads(self.config_path.read_text('utf-8')))
@@ -446,12 +448,14 @@ class BackupManager:
             self.config_error = 'تنظیمات ذخیره‌شده معتبر نیست؛ اجرای خودکار متوقف است.'
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS files (job TEXT, rel TEXT, sha TEXT, size INTEGER, mtime INTEGER, remote_id INTEGER, remote_name TEXT, PRIMARY KEY(job,rel))')
+            db.execute('CREATE TABLE IF NOT EXISTS run_items (run TEXT, path TEXT, status TEXT, size INTEGER, error TEXT, remote_id INTEGER, PRIMARY KEY(run,path))')
         try:
             self.history = json.loads((self.state_dir / 'history.json').read_text('utf-8'))[:30]
             if self.history:
                 self.state['lastResult'] = self.history[0]
         except (OSError, ValueError):
             self.history = []
+        self.recover_interrupted_run()
         if self.client.tokens:
             try:
                 self.state['lastTest'] = json.loads((self.state_dir / 'last-test.json').read_text('utf-8'))
@@ -471,7 +475,9 @@ class BackupManager:
             raise BackupError('تنظیمات باید یک شیء باشد.')
         if type(data.get('version', 1)) is not int or data.get('version', 1) != 1:
             raise BackupError('نسخهٔ تنظیمات پشتیبانی نمی‌شود؛ فایل اصلی حفظ شد.')
-        result = {'version': 1, 'remoteRoot': cloud_name(str(data.get('remoteRoot', 'Abr-Hamrahi-API')))}
+        result = {'version': 1, 'remoteRoot': cloud_name(str(data.get('remoteRoot', socket.gethostname() or 'Computer')))}
+        if result['remoteRoot'] == 'Abr-Hamrahi-API' and not data.get('folders'):
+            result['remoteRoot'] = cloud_name(socket.gethostname() or 'Computer')
         for key, default, low, high in [('intervalMinutes', 60, 5, 10080), ('maxFileMiB', 1024, 1, 20480),
                                       ('settleSeconds', 15, 0, 3600), ('debounceSeconds', 5, 1, 300)]:
             if type(data.get(key, default)) is not int:
@@ -487,6 +493,7 @@ class BackupManager:
         result['syncOnChange'] = data.get('syncOnChange', True) is True
         result['automaticPaused'] = data.get('automaticPaused', False) is True
         result['verifyUploads'] = data.get('verifyUploads', True) is True
+        result['startupEnabled'] = data.get('startupEnabled', False) is True
         excludes = data.get('exclude', DEFAULT_EXCLUDES)
         if not isinstance(excludes, list) or len(excludes) > 200 or any(not isinstance(x, str) or len(x) > 250 for x in excludes):
             raise BackupError('فهرست استثناها معتبر نیست.')
@@ -494,7 +501,7 @@ class BackupManager:
         folders = data.get('folders', [])
         if not isinstance(folders, list) or len(folders) > 100:
             raise BackupError('حداکثر صد پوشه می‌توانید اضافه کنید.')
-        result['folders'], seen, ids = [], [], set()
+        result['folders'], seen, ids, names = [], [], set(), set()
         for item in folders:
             if not isinstance(item, dict):
                 raise BackupError('تنظیم پوشه معتبر نیست.')
@@ -516,8 +523,13 @@ class BackupManager:
             if not isinstance(job_id, str) or not re.fullmatch('[a-f0-9]{12}', job_id) or job_id in ids:
                 raise BackupError('شناسهٔ پوشه معتبر نیست.')
             ids.add(job_id)
+            # Never rewrite the source folder's name or append an internal ID.
+            name = resolved.name
+            if not name or name.casefold() in names:
+                raise BackupError('نام پوشه‌های انتخابی باید متمایز باشد؛ دو پوشهٔ هم‌نام در مقصد ادغام نمی‌شوند.')
+            names.add(name.casefold())
             result['folders'].append({'id': job_id, 'path': str(resolved),
-                                      'name': cloud_name(str(item.get('name') or path.name)),
+                                      'name': name,
                                       'enabled': item.get('enabled', True) is True})
         return result
 
@@ -534,7 +546,19 @@ class BackupManager:
             if self.state['busy']:
                 raise BackupError('تا پایان کار جاری صبر کنید.', 409)
             result = self.validate_config(data)
-            atomic_json(self.config_path, result)
+            startup_changed = result['startupEnabled'] != self.config.get('startupEnabled', False)
+            previous_startup = self.startup.read() if startup_changed else None
+            if startup_changed:
+                try:
+                    self.startup.configure(result['startupEnabled'])
+                except OSError:
+                    raise BackupError('ثبت اجرای خودکار ویندوز ناموفق بود؛ تنظیمات ذخیره نشد.') from None
+            try:
+                atomic_json(self.config_path, result)
+            except Exception:
+                if startup_changed:
+                    self.startup.write(previous_startup)
+                raise
             self.config = result
             self.config_error = None
             self.state['nextRun'] = time.time() + result['intervalMinutes'] * 60 if result['automatic'] else None
@@ -553,12 +577,97 @@ class BackupManager:
             return json.loads(json.dumps({'config': self.config, 'state': self.state, 'history': self.history,
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
-                                          'provider': {'experimental': True, 'checkedOn': '2026-11-04',
+                                          'startup': self.startup.status(),
+                                          'provider': {'experimental': False, 'release': '1.0.0', 'checkedOn': '2026-11-04',
                                                        'mode': 'one-way-versioned'}}))
 
     def update(self, **values):
         with self.lock:
             self.state.update(values)
+
+    def step(self, key, status='running'):
+        with self.lock:
+            for item in self.state['steps']:
+                if item['key'] == key:
+                    item['status'] = status
+
+    def record_item(self, run, path, status, size=0, error='', remote_id=None):
+        with self.db() as db:
+            db.execute('INSERT OR REPLACE INTO run_items VALUES (?,?,?,?,?,?)',
+                       (run, str(path), status, size, error, remote_id))
+
+    def items(self, data):
+        run = data.get('run')
+        offset = data.get('offset', 0)
+        if not isinstance(run, str) or not re.fullmatch('[a-f0-9]{32}', run):
+            raise BackupError('شناسهٔ گزارش معتبر نیست.')
+        if type(offset) is not int or not 0 <= offset <= 100000000:
+            raise BackupError('شمارهٔ صفحه معتبر نیست.')
+        failed_only = data.get('failedOnly', False) is True
+        where = 'run=?' + (" AND status='error'" if failed_only else '')
+        with self.db() as db:
+            total = db.execute('SELECT count(*) FROM run_items WHERE ' + where, (run,)).fetchone()[0]
+            rows = db.execute('SELECT path,status,size,error,remote_id FROM run_items WHERE ' + where +
+                              " ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'processing' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,path LIMIT 100 OFFSET ?",
+                              (run, offset)).fetchall()
+        return {'run': run, 'offset': offset, 'total': total,
+                'items': [dict(zip(('path', 'status', 'bytes', 'error', 'remoteId'), row)) for row in rows]}
+
+    def selected_item(self, data, require_error=False):
+        # Local links and retry accept only a recorded file in a currently enabled source.
+        run, raw = data.get('run'), data.get('path')
+        if not isinstance(run, str) or not re.fullmatch('[a-f0-9]{32}', run) or not isinstance(raw, str):
+            raise BackupError('فایل گزارش معتبر نیست.')
+        with self.db() as db:
+            row = db.execute('SELECT status FROM run_items WHERE run=? AND path=?', (run, raw)).fetchone()
+        path = Path(raw)
+        if not row or (require_error and row[0] != 'error'):
+            raise BackupError('فایل خطادار در این گزارش پیدا نشد.', 404)
+        if (not path.is_absolute() or not path.is_file() or is_link(path)
+                or any(is_link(parent) for parent in path.parents)
+                or relevant_path(path, self.config, self.state_dir) is None):
+            raise BackupError('فایل در پوشه‌های فعال و مجاز موجود نیست.', 403)
+        return path.resolve()
+
+    def finish_result(self, result):
+        result['completedAt'] = now()
+        result['ok'] = not result['errors']
+        with self.lock:
+            self.history = [h for h in self.history if h.get('id') != result['id']]
+            self.history.insert(0, result)
+            self.history = self.history[:30]
+            atomic_json(self.state_dir / 'history.json', self.history)
+            self.state.update(lastResult=result, errors=result['errors'])
+            (self.state_dir / 'active-run.json').unlink(missing_ok=True)
+        keep = [h['id'] for h in self.history if h.get('id')]
+        if keep:
+            with self.db() as db:
+                db.execute('DELETE FROM run_items WHERE run NOT IN (' + ','.join('?' for _ in keep) + ')', keep)
+
+    def recover_interrupted_run(self):
+        draft = self.state_dir / 'active-run.json'
+        if not draft.exists():
+            return
+        try:
+            result = json.loads(draft.read_text('utf-8'))
+            run = result['id']
+            if not isinstance(run, str) or not re.fullmatch('[a-f0-9]{32}', run):
+                raise ValueError()
+            if any(h.get('id') == run for h in self.history):
+                draft.unlink(missing_ok=True)
+                return
+            message = 'اجرای قبلی پیش از پایان قطع شد؛ فایل‌های باقی‌مانده نیاز به تلاش مجدد دارند.'
+            with self.db() as db:
+                db.execute("UPDATE run_items SET status='error',error=? WHERE run=? AND status IN ('queued','processing')", (message, run))
+                rows = db.execute('SELECT status,size FROM run_items WHERE run=?', (run,)).fetchall()
+            result.update(uploaded=sum(s in ('ok', 'preview') for s, _ in rows),
+                          unchanged=sum(s == 'unchanged' for s, _ in rows),
+                          files=sum(s != 'error' for s, _ in rows),
+                          bytes=sum(n for s, n in rows if s in ('ok', 'preview')),
+                          errors=[message])
+            self.finish_result(result)
+        except (OSError, ValueError, KeyError, TypeError):
+            self.state['errors'] = ['گزارش اجرای قطع‌شده قابل بازیابی نیست؛ دوباره پیش‌نمایش را اجرا کنید.']
 
     def _on_source_change(self, path):
         with self.lock:
@@ -591,7 +700,7 @@ class BackupManager:
                  bool(self.client.tokens) and not self.config_error and not self.state['busy'])
         self.state['nextSync'] = max(min(deadlines), self.retry_at) if ready and deadlines else None
 
-    def start(self, action, trigger='manual'):
+    def start(self, action, trigger='manual', only_paths=None):
         if action not in ('preview', 'sync', 'test', 'connection'):
             raise BackupError('عملیات معتبر نیست.')
         if not self.work_lock.acquire(False):
@@ -604,7 +713,8 @@ class BackupManager:
             generation = self.change_generation
             self.stop.clear()
             self.state.update(busy=True, action=action, trigger=trigger, phase='شروع بررسی', current='',
-                              uploaded=0, skipped=0, bytes=0, errors=[])
+                              uploaded=0, skipped=0, bytes=0, errors=[], runId=None, steps=[], fileStage=None)
+            self.active_result = None
         if action != 'preview':
             self.update(connection=None)
         def worker():
@@ -615,35 +725,41 @@ class BackupManager:
                 elif action == 'test':
                     self.test_roundtrip()
                 else:
-                    self.sync(preview=action == 'preview', verify_existing=trigger != 'change')
+                    self.sync(preview=action == 'preview', verify_existing=trigger != 'change', only_paths=only_paths)
                     succeeded = bool(self.state['lastResult'] and self.state['lastResult']['ok'])
             except Exception as error:
                 message = str(error) if isinstance(error, BackupError) else 'عملیات ناموفق بود؛ فایل موفق ثبت نشد. نوع خطا: ' + type(error).__name__
                 self.update(phase='عملیات ناموفق', errors=[message])
+                with self.lock:
+                    for item in self.state['steps']:
+                        if item['status'] == 'running':
+                            item['status'] = 'error'
                 if action == 'test':
                     self.update(lastTest={'at': now(), 'ok': False, 'message': message})
                 if action in ('sync', 'preview'):
                     with self.lock:
-                        failed = {'at': now(), 'completedAt': now(), 'preview': action == 'preview', 'ok': False,
+                        failed = self.active_result or {'id': uuid.uuid4().hex, 'at': now(), 'preview': action == 'preview', 'ok': False,
                                   'uploaded': self.state['uploaded'], 'unchanged': self.state['skipped'],
                                   'bytes': self.state['bytes'], 'errors': [message], 'samples': [],
                                   'excluded': 0, 'files': 0, 'manifests': []}
-                        self.history.insert(0, failed)
-                        self.history = self.history[:30]
-                        self.state['lastResult'] = failed
-                        atomic_json(self.state_dir / 'history.json', self.history)
+                        if message not in failed['errors']:
+                            failed['errors'].append(message)
+                        with self.db() as db:
+                            db.execute("UPDATE run_items SET status='error',error=? WHERE run=? AND status IN ('queued','processing')",
+                                       (message, failed['id']))
+                        self.finish_result(failed)
             finally:
                 with self.lock:
                     if action == 'sync':
                         if trigger != 'change' or self.state['nextRun'] is None:
                             self.state['nextRun'] = time.time() + self.config['intervalMinutes'] * 60 if self.config['automatic'] else None
-                        if succeeded:
+                        if succeeded and not only_paths:
                             self.synced_generation = max(self.synced_generation, generation)
                             self.retry_at = 0
                             self.retry_attempt = 0
                             if self.change_generation <= self.synced_generation:
                                 self.change_due = None
-                        elif self.config['automatic']:
+                        elif not succeeded and self.config['automatic']:
                             if self.change_generation <= self.synced_generation:
                                 self._queue_sync()
                             self.retry_attempt = min(7, self.retry_attempt + 1)
@@ -658,7 +774,11 @@ class BackupManager:
         if self.stop.is_set():
             raise BackupError('کار با درخواست شما متوقف شد؛ فایل‌های موفق حفظ شدند.')
 
-    def walk(self, root, config, errors, skips):
+    def walk(self, root, config, errors, skips, on_error=None, only_paths=None):
+        def failure(path, message):
+            errors.append(message)
+            if on_error:
+                on_error(path, message)
         patterns = [x.replace('\\', '/').lower() for x in config['exclude']]
         def excluded(path):
             rel = path.relative_to(root).as_posix().lower()
@@ -669,7 +789,7 @@ class BackupManager:
             try:
                 entries = sorted(directory.iterdir(), key=lambda p: p.name.lower())
             except OSError:
-                errors.append('دسترسی به پوشه ممکن نیست: ' + str(directory))
+                failure(directory, 'دسترسی به پوشه ممکن نیست: ' + str(directory))
                 return
             for path in entries:
                 self.cancelled()
@@ -679,22 +799,24 @@ class BackupManager:
                     elif path.is_dir():
                         yield from visit(path)
                     elif path.is_file():
+                        if only_paths is not None and str(path.resolve()) not in only_paths:
+                            continue
                         info = path.stat()
                         if info.st_size > config['maxFileMiB'] * 1048576:
-                            errors.append('فایل از سقف اندازه بزرگ‌تر است: ' + str(path))
+                            failure(path, 'فایل از سقف اندازه بزرگ‌تر است: ' + str(path))
                         elif time.time() - info.st_mtime < config['settleSeconds']:
-                            errors.append('فایل اخیراً تغییر کرده؛ در نوبت بعد دوباره بررسی می‌شود: ' + str(path))
+                            failure(path, 'فایل اخیراً تغییر کرده؛ در نوبت بعد دوباره بررسی می‌شود: ' + str(path))
                         elif path.suffix.lower() in ('.mdf', '.ldf', '.ndf'):
-                            errors.append('برای SQL Server خروجی بکاپ .bak تهیه و آن را انتخاب کنید: ' + str(path))
+                            failure(path, 'برای SQL Server خروجی بکاپ .bak تهیه و آن را انتخاب کنید: ' + str(path))
                         else:
                             yield path
                 except OSError:
-                    errors.append('دسترسی به فایل ممکن نیست: ' + str(path))
+                    failure(path, 'دسترسی به فایل ممکن نیست: ' + str(path))
         if not root.is_dir():
-            errors.append('پوشه در دسترس نیست: ' + str(root))
+            failure(root, 'پوشه در دسترس نیست: ' + str(root))
             return
         if is_link(root):
-            errors.append('پوشه به پیوند تبدیل شده است: ' + str(root))
+            failure(root, 'پوشه به پیوند تبدیل شده است: ' + str(root))
             return
         yield from visit(root)
 
@@ -741,34 +863,64 @@ class BackupManager:
                 digest.update(block)
         return digest.hexdigest(), target.stat().st_size, before.st_mtime_ns, sqlite
 
-    def sync(self, preview=False, verify_existing=True):
+    def sync(self, preview=False, verify_existing=True, only_paths=None):
         config = json.loads(json.dumps(self.config))
         folders = [x for x in config['folders'] if x['enabled']]
         if not folders:
             raise BackupError('حداقل یک پوشهٔ فعال اضافه کنید.')
+        run = uuid.uuid4().hex
+        result = {'id': run, 'at': now(), 'preview': preview, 'uploaded': 0, 'unchanged': 0, 'bytes': 0,
+                  'files': 0, 'errors': [], 'excluded': 0, 'samples': [], 'manifests': [],
+                  'retry': bool(only_paths)}
+        self.active_result = result
+        atomic_json(self.state_dir / 'active-run.json', result)
+        self.update(runId=run, fileStage=None, steps=[
+            {'key': 'connection', 'label': 'بررسی اتصال' if not preview else 'آماده‌سازی محلی', 'status': 'running'},
+            {'key': 'scan', 'label': 'بررسی پوشه‌ها', 'status': 'pending'},
+            {'key': 'transfer', 'label': 'پردازش فایل‌ها', 'status': 'pending'},
+            {'key': 'manifest', 'label': 'ذخیرهٔ گزارش بازیابی' if not preview else 'ثبت پیش‌نمایش', 'status': 'pending'}])
         connection = None if preview else self.client.connection()
         if connection:
             self.update(connection=connection)
         remaining = max(0, connection['total'] - connection['used']) if connection else None
-        result = {'at': now(), 'preview': preview, 'uploaded': 0, 'unchanged': 0, 'bytes': 0,
-                  'files': 0, 'errors': [], 'excluded': 0, 'samples': [], 'manifests': []}
+        self.step('connection', 'ok')
+        self.step('scan')
+        jobs = []
+        for job in folders:
+            root, skips = Path(job['path']), []
+            if only_paths and not any(within(Path(p), root) for p in only_paths):
+                continue
+            def scan_error(path, message):
+                self.record_item(run, path, 'error', error=message)
+            paths = list(self.walk(root, config, result['errors'], skips, scan_error, only_paths))
+            with self.db() as db:
+                db.executemany('INSERT OR REPLACE INTO run_items VALUES (?,?,?,?,?,?)',
+                               ((run, str(path), 'queued', 0, '', None) for path in paths))
+            result['excluded'] += len(skips)
+            jobs.append((job, paths))
+        if only_paths and not any(paths for _, paths in jobs) and not result['errors']:
+            raise BackupError('فایل انتخابی پیش از تلاش مجدد حذف یا جابه‌جا شده است.')
+        self.step('scan', 'error' if result['errors'] else 'ok')
+        self.step('transfer')
         folders_cache, remote_cache = {}, {}
         def remote_parent(job, relative):
             parent = self.client.folder(config['remoteRoot'], None, folders_cache)
-            parent = self.client.folder(job['name'] + '-' + job['id'], parent, folders_cache)
+            parent = self.client.folder(job['name'], parent, folders_cache)
             for part in relative.parts[:-1]:
-                # Hash suffix keeps different local names distinct after sanitizing.
-                parent = self.client.folder(cloud_name(part) + '-' + hashlib.sha256(part.encode()).hexdigest()[:8], parent, folders_cache)
+                parent = self.client.folder(part, parent, folders_cache)
             return parent
         with tempfile.TemporaryDirectory(prefix='staging-', dir=self.state_dir) as staging:
             staged = Path(staging) / 'file'
-            for job in folders:
+            manifests = []
+            for job, paths in jobs:
                 manifest = []
-                errors, skips = result['errors'], []
+                errors = result['errors']
                 root = Path(job['path'])
-                for path in self.walk(root, config, errors, skips):
+                for path in paths:
                     relative = path.relative_to(root)
-                    self.update(phase='پیش‌نمایش و محاسبهٔ هش' if preview else 'آماده‌سازی و ارسال', current=str(path))
+                    self.cancelled()
+                    self.record_item(run, path, 'processing')
+                    self.update(phase='ساخت نسخهٔ موقت و محاسبهٔ هش', current=str(path), fileStage='snapshot')
                     try:
                         digest, size, mtime, is_sqlite = self.snapshot(path, staged)
                         if size > config['maxFileMiB'] * 1048576:
@@ -792,23 +944,31 @@ class BackupManager:
                                     raise BackupError('نسخهٔ ابری هم‌نام با اندازهٔ ناسازگار وجود دارد: ' + str(relative))
                                 object_id, exists = remote['id'], True
                                 if (verify_existing and config['verifyUploads']) or not old or old[0] != digest or old[1] != object_id:
+                                    self.update(phase='بررسی نسخهٔ موجود در ابر', fileStage='verify')
                                     self.client.verify(object_id, digest, size, cancelled=self.cancelled)
                             else:
                                 self.cancelled()
                                 if remaining is not None and size > remaining:
                                     raise BackupError('ظرفیت باقی‌ماندهٔ حساب برای این فایل کافی نیست.', 413)
+                                self.update(phase='ارسال فایل', fileStage='upload')
                                 uploaded = self.client.upload(staged, filename, parent, cancelled=self.cancelled)
                                 if remaining is not None:
                                     remaining -= size
                                 object_id = uploaded['id']
                                 if config['verifyUploads']:
-                                    self.update(phase='دریافت مجدد و بررسی SHA-256', current=str(path))
+                                    self.update(phase='دریافت مجدد و بررسی SHA-256', fileStage='verify')
                                     self.client.verify(object_id, digest, size, cancelled=self.cancelled)
                                 remote_cache[parent][filename] = uploaded
                         else:
                             exists = bool(old and old[0] == digest)
                         entry = {'path': relative.as_posix(), 'sha256': digest, 'size': size,
                                  'remoteId': object_id, 'remoteName': filename, 'sqliteSnapshot': is_sqlite}
+                        if not preview:
+                            self.update(fileStage='record', phase='ثبت نتیجهٔ فایل')
+                            with self.db() as db:
+                                db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)',
+                                           (job['id'], relative.as_posix(), digest, size, mtime, object_id, filename))
+                        self.record_item(run, path, 'unchanged' if exists else ('preview' if preview else 'ok'), size, remote_id=object_id)
                         manifest.append(entry)
                         result['files'] += 1
                         if exists:
@@ -818,44 +978,39 @@ class BackupManager:
                             result['bytes'] += size
                         if len(result['samples']) < 100:
                             result['samples'].append({'path': str(path), 'bytes': size, 'changed': not exists})
-                        if not preview:
-                            with self.db() as db:
-                                db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)',
-                                           (job['id'], relative.as_posix(), digest, size, mtime, object_id, filename))
                         self.update(uploaded=result['uploaded'], skipped=result['unchanged'], bytes=result['bytes'])
                     except (OSError, sqlite3.Error, BackupError) as error:
                         if self.stop.is_set():
                             raise
+                        message = str(error) if isinstance(error, BackupError) else 'خواندن یا snapshot فایل ناموفق بود: ' + str(path)
+                        self.record_item(run, path, 'error', error=message)
+                        errors.append(message)
                         if isinstance(error, BackupError):
-                            errors.append(str(error))
                             if error.status in (401, 403, 429, 502):
                                 raise
-                        else:
-                            errors.append('خواندن یا snapshot فایل ناموفق بود: ' + str(path))
                     finally:
                         staged.unlink(missing_ok=True)
-                result['excluded'] += len(skips)
+                manifests.append((job, manifest))
+            self.step('transfer', 'error' if result['errors'] else 'ok')
+            self.step('manifest')
+            for job, manifest in manifests:
                 if not preview:
                     self.cancelled()
-                    self.update(phase='ذخیرهٔ فهرست بازیابی', current=job['path'])
+                    self.update(phase='ذخیرهٔ فهرست بازیابی', current=job['path'], fileStage=None)
                     manifest_file = Path(staging) / 'manifest.json'
                     atomic_json(manifest_file, {'schema': 1, 'at': result['at'],
                                                 'folder': job['name'], 'files': manifest, 'errorCount': len(errors),
-                                                'exclude': config['exclude'], 'mode': 'one-way-versioned'})
+                                                'exclude': config['exclude'], 'mode': 'one-way-versioned',
+                                                'partial': bool(only_paths)})
                     name = '_manifest-' + dt.datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8] + '.json'
                     parent = remote_parent(job, Path('manifest.json'))
                     obj = self.client.upload(manifest_file, name, parent, cancelled=self.cancelled)
                     if config['verifyUploads']:
                         self.client.verify(obj['id'], hashlib.sha256(manifest_file.read_bytes()).hexdigest(), manifest_file.stat().st_size, cancelled=self.cancelled)
                     result['manifests'].append({'folder': job['name'], 'remoteId': obj['id'], 'name': name})
-        result['ok'] = not result['errors']
-        result['completedAt'] = now()
-        with self.lock:
-            self.history.insert(0, result)
-            self.history = self.history[:30]
-            atomic_json(self.state_dir / 'history.json', self.history)
-            self.state.update(lastResult=result, errors=result['errors'],
-                              phase=('پیش‌نمایش آماده است' if preview else 'پشتیبان‌گیری پایان یافت') + ('؛ نیاز به بررسی خطاها' if result['errors'] else ''))
+        self.finish_result(result)
+        self.step('manifest', 'ok')
+        self.update(phase=('پیش‌نمایش آماده است' if preview else 'پشتیبان‌گیری پایان یافت') + ('؛ نیاز به بررسی خطاها' if result['errors'] else ''), fileStage=None)
 
     def test_roundtrip(self):
         self.update(phase='بررسی اتصال حساب')
@@ -901,6 +1056,19 @@ class BackupManager:
             pass
 
     def handle(self, action, data):
+        if action == 'items':
+            return self.items(data)
+        if action == 'retry':
+            path = self.selected_item(data, require_error=True)
+            return self.start('sync', only_paths={str(path)})
+        if action == 'reveal':
+            path = self.selected_item(data)
+            if os.name != 'nt':
+                raise BackupError('نمایش فایل در این سیستم پشتیبانی نمی‌شود.')
+            # Select in Explorer rather than execute arbitrary scripts or shortcuts.
+            subprocess.Popen([str(Path(os.environ.get('WINDIR', r'C:\Windows')) / 'explorer.exe'),
+                              '/select,', str(path)])
+            return {'message': 'محل فایل باز شد.'}
         if action == 'config':
             return self.save_config(data)
         if action in ('preview', 'sync', 'test', 'connection'):

@@ -44,3 +44,5 @@ jobs:
         run: |
           python -m pip install dist/*.whl
           hamrahi-backup --version
+      - name: UI controller checks
+        run: node tests/web_checks.mjs

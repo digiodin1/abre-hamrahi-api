@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0 - 2026-11-05
+
+- Separate account, folders, settings, processing, and reports pages.
+- Preserve source folder names exactly, including nested folders; default new cloud roots to the computer name.
+- Add opt-in Windows logon startup, scoped to the current user and private state directory.
+- Show live stages, all eligible files through paginated reports, per-file errors, and isolated retry.
+- Preserve partial results and recover interrupted runs; local file links select recorded files in Explorer without executing them.
+- Promote the application to its first main release. The provider integration remains unofficial.
+
+### Upgrade from 0.2
+
+The new folder layout omits the old ID/hash suffixes on cloud folders. Existing cloud backups remain available; the first run with the new layout may upload another copy. Folders with the same name must be selected separately under distinct cloud roots. Existing custom cloud roots are retained.
+
 ## 0.2.0 - 2026-11-05
 
 - Display the requested Abre Hamrahi API product name and provide the `abre-hamrahi-api` launcher while retaining older command aliases.

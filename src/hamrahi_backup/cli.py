@@ -58,7 +58,7 @@ def instance_lock(directory):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Abre Hamrahi API: local versioned backup panel (experimental provider API).')
+    parser = argparse.ArgumentParser(description='Abre Hamrahi API: local versioned backup panel.')
     parser.add_argument('--version', action='version', version=__version__)
     parser.add_argument('--port', type=int, default=8765, help='Loopback panel port (default: 8765)')
     parser.add_argument('--data-dir', type=Path, default=default_data_dir(), help='Private local settings/session directory')
@@ -69,7 +69,7 @@ def main(argv=None):
     directory = args.data_dir.expanduser().resolve()
     try:
         with instance_lock(directory):
-            manager = BackupManager(directory, state_dir=directory)
+            manager = BackupManager(directory, state_dir=directory, port=args.port)
             server = PanelServer(manager, args.port)
             scheduler = threading.Thread(target=manager.scheduler, daemon=True, name='backup-scheduler')
             scheduler.start()

@@ -5,7 +5,8 @@
   "description": "Loopback-only local panel for versioned backups to Abrehamrahi",
   "entrypoints": [
     "src/hamrahi_backup/cli.py",
-    "src/hamrahi_backup/server.py"
+    "src/hamrahi_backup/server.py",
+    "src/hamrahi_backup/startup_runner.py"
   ],
   "apis": [
     {
@@ -13,5 +14,5 @@
       "port": 8765
     }
   ],
-  "startup": "manual"
+  "startup": "manual by default; optional per-user Windows logon from settings"
 }

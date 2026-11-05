@@ -31,3 +31,4 @@ htmlcov/
 .ruff_cache/
 .vscode/
 .idea/
+.qa/

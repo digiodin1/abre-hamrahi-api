@@ -128,11 +128,13 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', '-1'))
             if not 0 <= length <= MAX_BODY:
                 raise BackupError('درخواست بیش از حد مجاز بزرگ است.', 413)
-            if self.headers.get_content_type() != 'application/json':
-                raise BackupError('نوع درخواست باید JSON باشد.', 415)
             body = self.rfile.read(length)
             if len(body) != length:
                 raise BackupError('درخواست ناقص است.')
+            # Consume bounded bodies before rejecting their type; unread bytes can
+            # turn a useful HTTP error into a Windows TCP reset on close.
+            if self.headers.get_content_type() != 'application/json':
+                raise BackupError('نوع درخواست باید JSON باشد.', 415)
             data = json.loads(body)
             if not isinstance(data, dict):
                 raise BackupError('درخواست باید یک شیء JSON باشد.')

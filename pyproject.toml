@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "abre-hamrahi-api"
-version = "0.2.0"
-description = "Abre Hamrahi API: local versioned backup panel for Abrehamrahi (experimental unofficial API)"
+version = "1.0.0"
+description = "Abre Hamrahi API: local versioned backup panel for Abrehamrahi"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -14,7 +14,7 @@ authors = [{name = "Abre Hamrahi API contributors"}]
 dependencies = []
 keywords = ["backup", "abrehamrahi", "windows", "persian"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Topic :: System :: Archiving :: Backup",

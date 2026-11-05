@@ -2,6 +2,8 @@
 
 Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, creates a content-addressed filename, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
+Version **1.0.0** is the first main release. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
+
 The project is intentionally conservative:
 
 - It never deletes cloud objects or local files.
@@ -50,7 +52,15 @@ The provider cannot call this local API back into your computer. A process alrea
 
 Automatic sync can be paused and resumed from the panel. If the computer is offline or the provider rejects a request, retries use bounded backoff and the next change remains pending; the local source is never deleted.
 
+**Automatic sync** is the master switch for the periodic reconciliation. **Also start when files change** adds the faster change trigger; it is available only when automatic sync is enabled. Neither setting starts the application after Windows logon. Enable **Run at Windows sign-in** in Settings and save to register the current interpreter, state directory, and port under the current user's Windows Run key. Turn it off and save before uninstalling or moving the installation. It starts without a browser and requires no administrator privileges.
+
+New cloud roots default to the computer name. Source folders and nested folders retain their exact names; there is no cloud alias. Two selected source folders cannot share a name. The 1.0 layout removes the suffixes used by 0.2, so the first sync after upgrading can create another cloud copy; existing backups are retained. If the provider rejects a folder name, the error is reported instead of silently renaming it.
+
+The Processing page shows stages and every eligible file in pages of 100, with errors first. Retry beside a failed file processes only that file and generates a partial manifest. It does not acknowledge unrelated pending changes. Reports retain the last 30 runs, including file results and partial successes. An interrupted run is recovered at the next start. File links select the recorded local file in Windows Explorer; they never execute arbitrary files. Removed, excluded, disabled, or linked source paths cannot be opened or retried through this API.
+
 See [automatic sync and desktop behavior](docs/automatic-sync.md) for settings, the Google Drive for desktop design references, and the supported behavior. For native Windows change notifications, install with `python -m pip install ".[native]"`. The folder picker requires the Tcl/Tk component of the standard Python Windows installer; manual path entry remains available.
+
+The [local API reference](docs/local-api.md) documents file reports, retries, startup settings, and request protections.
 
 The service keeps old versions in the cloud. A local deletion does not delete cloud history. Restore is deliberately manual: download the chosen object and use the generated manifest to map its relative path and hash back to the source folder.
 
@@ -74,6 +84,8 @@ python -m unittest discover -s tests -v
 ```
 
 The test suite uses an in-memory fake cloud and synthetic temporary folders. It does not require an Abrehamrahi account and never sends test files to the network. See [CONTRIBUTING.md](CONTRIBUTING.md) for the review checklist and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+With Node.js 18 or newer, run `node tests/web_checks.mjs` for dependency-free UI controller checks. They use a minimal DOM double and do not replace a visual browser check. For manual browser QA with 105 synthetic files and a retryable error, run `python tests/ui_fixture.py` with `PYTHONPATH=src` and open the printed loopback URL. This fixture never accesses a real provider account.
 
 ## License
 
