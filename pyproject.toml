@@ -3,14 +3,15 @@ requires = ["setuptools>=77,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "abr-hamrahi-api"
-version = "0.1.0"
-description = "Abr Hamrahi API: local versioned backup panel for Abrehamrahi (experimental unofficial API)"
+name = "abre-hamrahi-api"
+version = "0.2.0"
+description = "Abre Hamrahi API: local versioned backup panel for Abrehamrahi (experimental unofficial API)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{name = "Abr Hamrahi API contributors"}]
+authors = [{name = "Abre Hamrahi API contributors"}]
+dependencies = []
 keywords = ["backup", "abrehamrahi", "windows", "persian"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -20,8 +21,12 @@ classifiers = [
 ]
 
 [project.scripts]
+abre-hamrahi-api = "hamrahi_backup.cli:main"
 abr-hamrahi-api = "hamrahi_backup.cli:main"
 hamrahi-backup = "hamrahi_backup.cli:main"
+
+[project.optional-dependencies]
+native = ["watchdog>=4,<8"]
 
 [project.urls]
 Repository = "https://github.com/digiodin1/abre-hamrahi-api"

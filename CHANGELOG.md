@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - 2026-11-05
+
+- Display the requested Abre Hamrahi API product name and provide the `abre-hamrahi-api` launcher while retaining older command aliases.
+- React to file changes with debounce, retained pending work, bounded retry, periodic integrity checks, and pause/resume controls.
+- Use optional native filesystem notifications with a standard-library polling fallback.
+- Open the folder picker in a dedicated Python GUI process, independent of PowerShell execution policy.
+- Cover Windows canonical paths, concurrent edits, retry, pause, and automatic uploads with synthetic regression tests.
+
 ## 0.1.0 - 2026-11-04
 
 - Initial public release of the standalone local Abr Hamrahi API panel.

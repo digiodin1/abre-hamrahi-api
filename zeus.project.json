@@ -1,5 +1,5 @@
 {
-  "name": "abr-hamrahi-api",
+  "name": "abre-hamrahi-api",
   "owner": "internal",
   "kind": "local-backup-panel",
   "description": "Loopback-only local panel for versioned backups to Abrehamrahi",

@@ -58,7 +58,7 @@ def instance_lock(directory):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Abr Hamrahi API: local versioned backup panel (experimental provider API).')
+    parser = argparse.ArgumentParser(description='Abre Hamrahi API: local versioned backup panel (experimental provider API).')
     parser.add_argument('--version', action='version', version=__version__)
     parser.add_argument('--port', type=int, default=8765, help='Loopback panel port (default: 8765)')
     parser.add_argument('--data-dir', type=Path, default=default_data_dir(), help='Private local settings/session directory')
@@ -74,7 +74,7 @@ def main(argv=None):
             scheduler = threading.Thread(target=manager.scheduler, daemon=True, name='backup-scheduler')
             scheduler.start()
             url = f'http://127.0.0.1:{server.server_port}/'
-            print(f'Abr Hamrahi API {__version__}: {url}', flush=True)
+            print(f'Abre Hamrahi API {__version__}: {url}', flush=True)
             print('Keep this process running for scheduled backups. Press Ctrl+C to stop.', flush=True)
             if os.name != 'nt':
                 print('Account login requires Windows DPAPI; this platform supports offline preview/testing only.', flush=True)
@@ -86,8 +86,7 @@ def main(argv=None):
                 print('Stopping; waiting for the current bounded network request...', flush=True)
             finally:
                 shutdown_failed = False
-                manager.shutdown.set()
-                manager.stop.set()
+                manager.close()
                 server.server_close()
                 scheduler.join(timeout=2)
                 if manager.work_lock.acquire(timeout=195):

@@ -19,6 +19,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -26,6 +27,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+
+from .watcher import ChangeMonitor, relevant_path
 
 API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = ['.git', 'node_modules', '.venv', 'venv', '__pycache__',
@@ -418,13 +421,23 @@ class BackupManager:
         self.work_lock = threading.Lock()
         self.stop = threading.Event()
         self.shutdown = threading.Event()
+        self.browse_lock = threading.Lock()
+        self.change_due = None
+        self.change_generation = 0
+        self.synced_generation = 0
+        self.retry_at = 0
+        self.retry_attempt = 0
+        self.change_monitor = ChangeMonitor(self._on_source_change)
         self.client = client or HamrahiClient(self.state_dir)
         self.state = {'busy': False, 'action': None, 'phase': 'آماده', 'current': '',
                       'uploaded': 0, 'skipped': 0, 'bytes': 0, 'errors': [], 'lastResult': None,
-                      'connection': None, 'lastTest': None, 'nextRun': None}
+                      'connection': None, 'lastTest': None, 'nextRun': None, 'pendingSync': False,
+                      'watching': 0, 'watchBackend': None, 'watchError': None, 'lastChange': None,
+                      'nextSync': None, 'trigger': None}
         self.config_error = None
         self.config = {'version': 1, 'remoteRoot': 'Abr-Hamrahi-API', 'intervalMinutes': 60,
-                       'automatic': False, 'maxFileMiB': 1024, 'settleSeconds': 15,
+                       'automatic': False, 'syncOnChange': True, 'automaticPaused': False,
+                       'debounceSeconds': 5, 'maxFileMiB': 1024, 'settleSeconds': 15,
                        'verifyUploads': True, 'exclude': DEFAULT_EXCLUDES[:], 'folders': []}
         try:
             if self.config_path.exists():
@@ -444,6 +457,8 @@ class BackupManager:
                 self.state['lastTest'] = json.loads((self.state_dir / 'last-test.json').read_text('utf-8'))
             except (OSError, ValueError):
                 pass
+        if self.config['automatic']:
+            self._queue_sync()
 
     @contextmanager
     def db(self):
@@ -457,7 +472,8 @@ class BackupManager:
         if type(data.get('version', 1)) is not int or data.get('version', 1) != 1:
             raise BackupError('نسخهٔ تنظیمات پشتیبانی نمی‌شود؛ فایل اصلی حفظ شد.')
         result = {'version': 1, 'remoteRoot': cloud_name(str(data.get('remoteRoot', 'Abr-Hamrahi-API')))}
-        for key, default, low, high in [('intervalMinutes', 60, 5, 10080), ('maxFileMiB', 1024, 1, 20480), ('settleSeconds', 15, 0, 3600)]:
+        for key, default, low, high in [('intervalMinutes', 60, 5, 10080), ('maxFileMiB', 1024, 1, 20480),
+                                      ('settleSeconds', 15, 0, 3600), ('debounceSeconds', 5, 1, 300)]:
             if type(data.get(key, default)) is not int:
                 raise BackupError('تنظیم عددی باید عدد صحیح باشد: ' + key)
             try:
@@ -468,6 +484,8 @@ class BackupManager:
                 raise BackupError('تنظیم عددی خارج از بازه است: ' + key)
             result[key] = number
         result['automatic'] = data.get('automatic', False) is True
+        result['syncOnChange'] = data.get('syncOnChange', True) is True
+        result['automaticPaused'] = data.get('automaticPaused', False) is True
         result['verifyUploads'] = data.get('verifyUploads', True) is True
         excludes = data.get('exclude', DEFAULT_EXCLUDES)
         if not isinstance(excludes, list) or len(excludes) > 200 or any(not isinstance(x, str) or len(x) > 250 for x in excludes):
@@ -520,10 +538,18 @@ class BackupManager:
             self.config = result
             self.config_error = None
             self.state['nextRun'] = time.time() + result['intervalMinutes'] * 60 if result['automatic'] else None
+            self.retry_at = 0
+            self.retry_attempt = 0
+            if result['automatic']:
+                self._queue_sync()
+            else:
+                self.change_due = None
+                self.synced_generation = self.change_generation
             return self.public()
 
     def public(self):
         with self.lock:
+            self._refresh_automation()
             return json.loads(json.dumps({'config': self.config, 'state': self.state, 'history': self.history,
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
@@ -534,23 +560,63 @@ class BackupManager:
         with self.lock:
             self.state.update(values)
 
-    def start(self, action):
+    def _on_source_change(self, path):
+        with self.lock:
+            if not self.config.get('automatic') or not self.config.get('syncOnChange'):
+                return
+            if relevant_path(path, self.config, self.state_dir) is None:
+                return
+            self._queue_sync()
+            self.state['lastChange'] = now()
+
+    def configure_change_monitor(self):
+        with self.lock:
+            config = json.loads(json.dumps(self.config))
+        status = self.change_monitor.configure(config, self.state_dir)
+        with self.lock:
+            if status['watching'] and status['watching'] != self.state['watching']:
+                self._queue_sync()
+            self.state.update(watching=status['watching'], watchBackend=status['backend'], watchError=status['error'])
+
+    def _queue_sync(self):
+        self.change_generation += 1
+        self.change_due = time.time() + max(self.config['debounceSeconds'], self.config['settleSeconds'])
+
+    def _refresh_automation(self):
+        pending = self.change_generation > self.synced_generation
+        self.state['pendingSync'] = pending
+        deadlines = [deadline for deadline in (self.change_due if pending else None, self.state['nextRun'])
+                     if deadline is not None]
+        ready = (self.config['automatic'] and not self.config['automaticPaused'] and
+                 bool(self.client.tokens) and not self.config_error and not self.state['busy'])
+        self.state['nextSync'] = max(min(deadlines), self.retry_at) if ready and deadlines else None
+
+    def start(self, action, trigger='manual'):
         if action not in ('preview', 'sync', 'test', 'connection'):
             raise BackupError('عملیات معتبر نیست.')
         if not self.work_lock.acquire(False):
             raise BackupError('یک کار دیگر در حال اجراست.', 409)
-        self.stop.clear()
-        self.update(busy=True, action=action, phase='شروع بررسی', current='', uploaded=0, skipped=0, bytes=0, errors=[])
+        with self.lock:
+            if self.shutdown.is_set() or (trigger != 'manual' and
+                    (not self.config['automatic'] or self.config['automaticPaused'] or not self.client.tokens)):
+                self.work_lock.release()
+                raise BackupError('اجرای خودکار اکنون آماده نیست.', 409)
+            generation = self.change_generation
+            self.stop.clear()
+            self.state.update(busy=True, action=action, trigger=trigger, phase='شروع بررسی', current='',
+                              uploaded=0, skipped=0, bytes=0, errors=[])
         if action != 'preview':
             self.update(connection=None)
         def worker():
+            succeeded = False
             try:
                 if action == 'connection':
                     self.update(connection=self.client.connection(), phase='اتصال حساب تأیید شد')
                 elif action == 'test':
                     self.test_roundtrip()
                 else:
-                    self.sync(preview=action == 'preview')
+                    self.sync(preview=action == 'preview', verify_existing=trigger != 'change')
+                    succeeded = bool(self.state['lastResult'] and self.state['lastResult']['ok'])
             except Exception as error:
                 message = str(error) if isinstance(error, BackupError) else 'عملیات ناموفق بود؛ فایل موفق ثبت نشد. نوع خطا: ' + type(error).__name__
                 self.update(phase='عملیات ناموفق', errors=[message])
@@ -568,7 +634,22 @@ class BackupManager:
                         atomic_json(self.state_dir / 'history.json', self.history)
             finally:
                 with self.lock:
-                    self.state.update(busy=False, current='', nextRun=time.time() + self.config['intervalMinutes'] * 60 if self.config['automatic'] else None)
+                    if action == 'sync':
+                        if trigger != 'change' or self.state['nextRun'] is None:
+                            self.state['nextRun'] = time.time() + self.config['intervalMinutes'] * 60 if self.config['automatic'] else None
+                        if succeeded:
+                            self.synced_generation = max(self.synced_generation, generation)
+                            self.retry_at = 0
+                            self.retry_attempt = 0
+                            if self.change_generation <= self.synced_generation:
+                                self.change_due = None
+                        elif self.config['automatic']:
+                            if self.change_generation <= self.synced_generation:
+                                self._queue_sync()
+                            self.retry_attempt = min(7, self.retry_attempt + 1)
+                            self.retry_at = time.time() + min(300, 5 * 2 ** (self.retry_attempt - 1))
+                    self.state.update(busy=False, current='')
+                    self._refresh_automation()
                 self.work_lock.release()
         threading.Thread(target=worker, daemon=True, name='cloud-backup').start()
         return {'started': True}
@@ -660,7 +741,7 @@ class BackupManager:
                 digest.update(block)
         return digest.hexdigest(), target.stat().st_size, before.st_mtime_ns, sqlite
 
-    def sync(self, preview=False):
+    def sync(self, preview=False, verify_existing=True):
         config = json.loads(json.dumps(self.config))
         folders = [x for x in config['folders'] if x['enabled']]
         if not folders:
@@ -710,7 +791,7 @@ class BackupManager:
                                 if int(remote.get('size', -1)) != size or not remote.get('key'):
                                     raise BackupError('نسخهٔ ابری هم‌نام با اندازهٔ ناسازگار وجود دارد: ' + str(relative))
                                 object_id, exists = remote['id'], True
-                                if config['verifyUploads'] or not old or old[0] != digest or old[1] != object_id:
+                                if (verify_existing and config['verifyUploads']) or not old or old[0] != digest or old[1] != object_id:
                                     self.client.verify(object_id, digest, size, cancelled=self.cancelled)
                             else:
                                 self.cancelled()
@@ -779,7 +860,7 @@ class BackupManager:
     def test_roundtrip(self):
         self.update(phase='بررسی اتصال حساب')
         self.update(connection=self.client.connection())
-        content = ('Abr Hamrahi API self-test\n' + now() + '\n' + uuid.uuid4().hex + '\n').encode()
+        content = ('Abre Hamrahi API self-test\n' + now() + '\n' + uuid.uuid4().hex + '\n').encode()
         digest = hashlib.sha256(content).hexdigest()
         with tempfile.TemporaryDirectory(prefix='selftest-', dir=self.state_dir) as staging:
             path = Path(staging) / 'test.txt'
@@ -797,26 +878,50 @@ class BackupManager:
         self.update(lastTest=test, phase='آزمون واقعی آپلود و بازیابی موفق بود')
 
     def scheduler(self):
-        while not self.shutdown.wait(10):
-            with self.lock:
-                if not self.config['automatic'] or self.state['busy'] or self.config_error:
-                    continue
-                if self.state['nextRun'] is None:
-                    self.state['nextRun'] = time.time() + self.config['intervalMinutes'] * 60
-                due = time.time() >= self.state['nextRun']
-            if due:
-                try:
-                    self.start('sync')
-                except BackupError:
-                    pass
+        try:
+            while not self.shutdown.is_set():
+                self.configure_change_monitor()
+                self.scheduler_tick()
+                self.shutdown.wait(1)
+        finally:
+            self.change_monitor.close()
+
+    def scheduler_tick(self):
+        with self.lock:
+            if self.config['automatic'] and self.state['nextRun'] is None:
+                self.state['nextRun'] = time.time() + self.config['intervalMinutes'] * 60
+            self._refresh_automation()
+            due = self.state['nextSync']
+            if self.shutdown.is_set() or due is None or time.time() < due:
+                return
+            trigger = 'schedule' if self.state['nextRun'] is not None and self.state['nextRun'] <= time.time() else 'change'
+        try:
+            self.start('sync', trigger=trigger)
+        except BackupError:
+            pass
 
     def handle(self, action, data):
         if action == 'config':
             return self.save_config(data)
         if action in ('preview', 'sync', 'test', 'connection'):
             return self.start(action)
+        if action in ('pause', 'resume'):
+            with self.lock:
+                config = self.config | {'automaticPaused': action == 'pause'}
+                atomic_json(self.config_path, config)
+                self.config = config
+                if action == 'resume' and self.config['automatic']:
+                    self.retry_at = 0
+                    self._queue_sync()
+                elif action == 'pause' and self.state['busy'] and self.state['action'] == 'sync':
+                    self.stop.set()
+            self.configure_change_monitor()
+            return {'message': 'سینک خودکار متوقف شد؛ برای ادامه دکمهٔ ادامه را بزنید.' if action == 'pause'
+                    else 'سینک خودکار ادامه دارد؛ تغییرات دوباره بررسی می‌شوند.'}
         if action == 'cancel':
             self.stop.set()
+            if self.config['automatic']:
+                self.handle('pause', {})
             return {'message': 'توقف پس از پایان درخواست جاری اعمال می‌شود.'}
         if action in ('login', 'code', 'captcha', 'logout'):
             if not self.work_lock.acquire(False):
@@ -827,8 +932,11 @@ class BackupManager:
                     with self.lock:
                         self.config['automatic'] = False
                         atomic_json(self.config_path, self.config)
-                        self.state.update(connection=None, nextRun=None, lastTest=None)
+                        self.change_due = None
+                        self.synced_generation = self.change_generation
+                        self.state.update(connection=None, nextRun=None, lastTest=None, pendingSync=False)
                         (self.state_dir / 'last-test.json').unlink(missing_ok=True)
+                    self.configure_change_monitor()
                     return {'message': 'نشست محلی پاک شد؛ اجرای خودکار خاموش است.'}
                 result = self.client.auth(action, data)
                 if action == 'login':
@@ -840,13 +948,43 @@ class BackupManager:
         raise BackupError('مسیر یافت نشد.', 404)
 
     def browse(self):
+        if not self.browse_lock.acquire(False):
+            raise BackupError('پنجرهٔ انتخاب پوشه از قبل باز است.', 409)
+        try:
+            return self._browse()
+        finally:
+            self.browse_lock.release()
+
+    def _browse(self):
         if os.name != 'nt':
             raise BackupError('در این سیستم مسیر پوشه را دستی وارد کنید.')
-        script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description='Select backup source folder'; $d.ShowNewFolderButton=$false; if($d.ShowDialog() -eq 'OK') {[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::Write($d.SelectedPath)}"
+        script = Path(__file__).with_name('folder_picker.py')
+        if not script.is_file():
+            raise BackupError('فایل انتخاب‌گر پوشه در نصب برنامه پیدا نشد.')
         flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        executable = Path(sys.executable)
+        if executable.name.lower() == 'pythonw.exe':
+            executable = executable.with_name('python.exe')
         try:
-            result = subprocess.run(['powershell.exe', '-NoProfile', '-STA', '-Command', script],
+            result = subprocess.run([str(executable), '-I', str(script)],
                                     capture_output=True, timeout=180, creationflags=flags)
-            return {'path': result.stdout.decode('utf-8-sig').strip()}
+            if result.returncode:
+                raise BackupError('پنجرهٔ انتخاب پوشه باز نشد؛ نصب Python باید مؤلفهٔ Tcl/Tk داشته باشد. مسیر را می‌توانید دستی وارد کنید.')
+            payload = json.loads(result.stdout.decode('utf-8-sig'))
+            if not isinstance(payload, dict) or not isinstance(payload.get('path'), str) or type(payload.get('cancelled')) is not bool:
+                raise ValueError()
+            path = payload['path'].strip()
+            if path and not Path(path).is_dir():
+                raise ValueError()
+            return {'path': path, 'cancelled': payload['cancelled']}
+        except (ValueError, UnicodeError):
+            raise BackupError('پاسخ انتخاب‌گر پوشه قابل خواندن نبود.') from None
         except subprocess.TimeoutExpired:
             raise BackupError('مهلت انتخاب پوشه تمام شد.') from None
+        except OSError:
+            raise BackupError('اجرای انتخاب‌گر پوشه ممکن نشد؛ مسیر پوشه را دستی وارد کنید.') from None
+
+    def close(self):
+        self.shutdown.set()
+        self.stop.set()
+        self.change_monitor.close()

@@ -1,4 +1,4 @@
-"""Loopback-only Abr Hamrahi API panel with no filesystem routes or request logs."""
+"""Loopback-only Abre Hamrahi API panel with no filesystem routes or request logs."""
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -102,6 +102,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(403, {'error': 'دسترسی فقط از پنل محلی مجاز است.'})
         elif self.path == '/api/backup':
             self.reply(200, self.server.manager.public() | {'csrfToken': self.server.csrf})
+        elif self.path == '/api/status':
+            self.reply(200, {'app': 'abre-hamrahi-api', 'status': 'ready'})
         elif self.path in self.server.assets:
             body, mime = self.server.assets[self.path]
             self.reply(200, body, mime)
