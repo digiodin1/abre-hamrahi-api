@@ -613,7 +613,7 @@ class BackupManager:
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
                                           'startup': self.startup.status(),
-                                          'provider': {'experimental': False, 'release': '1.1.0', 'checkedOn': '2026-11-07',
+                                          'provider': {'experimental': False, 'release': '1.2.0', 'checkedOn': '2026-11-07',
                                                        'mode': 'one-way-versioned'}}))
 
     def update(self, **values):
@@ -1158,8 +1158,11 @@ class BackupManager:
         raise BackupError('مسیر یافت نشد.', 404)
 
     def browse(self):
-        if not self.browse_lock.acquire(False):
-            raise BackupError('پنجرهٔ انتخاب پوشه از قبل باز است.', 409)
+        with self.lock:
+            if self.shutdown.is_set():
+                raise BackupError('برنامه در حال بسته‌شدن است.', 409)
+            if not self.browse_lock.acquire(False):
+                raise BackupError('پنجرهٔ انتخاب پوشه از قبل باز است.', 409)
         try:
             return self._browse()
         finally:

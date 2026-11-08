@@ -75,7 +75,7 @@ def main(argv=None):
             scheduler.start()
             url = f'http://127.0.0.1:{server.server_port}/'
             print(f'Abre Hamrahi API {__version__}: {url}', flush=True)
-            print('Keep this process running for scheduled backups. Press Ctrl+C to stop.', flush=True)
+            print('Keep this process running for scheduled backups. Exit from Settings or press Ctrl+C.', flush=True)
             if os.name != 'nt':
                 print('Account login requires Windows DPAPI; this platform supports offline preview/testing only.', flush=True)
             if not args.no_browser:

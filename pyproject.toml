@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "abre-hamrahi-api"
-version = "1.1.0"
+version = "1.2.0"
 description = "Abre Hamrahi API: local versioned backup panel for Abrehamrahi"
 readme = "README.md"
 requires-python = ">=3.11"

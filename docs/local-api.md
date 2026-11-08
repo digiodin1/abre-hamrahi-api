@@ -1,4 +1,4 @@
-# Local panel API (1.0)
+# Local panel API (1.2)
 
 This is a private desktop API bound to IPv4 loopback. It is not a server that the cloud provider can call. Do not forward or publish its port.
 
@@ -14,11 +14,14 @@ Every action below is `POST /api/backup/<action>` with a JSON object, a same-ori
 | `sync` | Start a full one-way backup of active sources. |
 | `connection` / `test` | Check quota or perform a small upload/download verification. |
 | `pause` / `resume` / `cancel` | Pause automation, resume pending work, or request cancellation after the current bounded operation. |
+| `shutdown` | `{ "confirm": true }`. Acknowledges with `shuttingDown: true`, stops accepting new work, cancels the current run cooperatively, and exits after bounded cleanup. Settings, login, completed file records, and history remain on disk. |
 | `items` | `{ "run": "<32 lowercase hexadecimal characters>", "offset": 0, "failedOnly": false }`. Returns up to 100 file records plus `total`. Page with offsets 0, 100, 200, etc. |
 | `retry` | `{ "run": "<run ID>", "path": "<recorded failed local file>" }`. Starts a separate run containing only that file. The file must still exist in an enabled, non-excluded source without symlink/junction parents. |
 | `reveal` | Same run/path shape. Selects the recorded file in Explorer. It does not execute files or serve their contents over HTTP. |
 
 The `login`, `code`, `captcha`, and `logout` actions support the panel's account flow. Do not put credentials in query strings, command examples, issues, screenshots, or reports.
+
+`shutdown` requires the same loopback, Host, Origin and CSRF checks as every other POST. Missing or non-boolean confirmation returns 400. An open folder chooser returns 409; close it and retry. Once exit is requested, subsequent POSTs return 503 while the listener remains available. The response acknowledges the request, not process termination: an in-flight network operation can still take time to finish. The launcher waits for its worker before releasing the private state lock. Reopening the browser does not restart the process; rerun the launcher. Closing the app does not disable an existing Windows sign-in startup entry. The settings button asks for confirmation and warns about unsaved edits.
 
 The automatic master switch enables periodic reconciliation. `syncOnChange` adds debounced filesystem-triggered work. `startupEnabled` separately opts into the current user's Windows Run key; it is false by default. Failed registration leaves the configuration unchanged. If configuration persistence fails after registration, the previous registry value is restored.
 

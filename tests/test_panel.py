@@ -7,8 +7,9 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
-from hamrahi_backup.engine import BackupManager
+from hamrahi_backup.engine import BackupError, BackupManager
 from hamrahi_backup.server import PanelServer
 from test_engine import FakeCloud
 
@@ -23,6 +24,7 @@ class PanelTests(unittest.TestCase):
         self.base = f'http://127.0.0.1:{self.server.server_port}'
 
     def tearDown(self):
+        self.engine.close()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
@@ -111,3 +113,67 @@ class PanelTests(unittest.TestCase):
 
     def test_server_is_bound_to_ipv4_loopback(self):
         self.assertEqual(self.server.server_address[0], '127.0.0.1')
+
+    def test_shutdown_requires_explicit_confirmation_and_local_csrf(self):
+        path = '/api/backup/shutdown'
+        before = self.engine.public()['config']
+        self.assertEqual(self.request(path)[0], 404)
+        self.assertEqual(self.post(b'{"confirm":true}', {}, path)[0], 403)
+        cross_site = {'Content-Type': 'application/json', 'Origin': 'https://evil.example',
+                      'X-Abr-Hamrahi-CSRF': self.server.csrf}
+        self.assertEqual(self.post(b'{"confirm":true}', cross_site, path)[0], 403)
+        for body in [b'{}', b'{"confirm":false}', b'{"confirm":1}', b'{"confirm":"true"}']:
+            self.assertEqual(self.post(body, path=path)[0], 400)
+        self.assertFalse(self.server.exit_requested.is_set())
+        self.assertFalse(self.engine.shutdown.is_set())
+        self.assertEqual(self.post(b'{"confirm":true}', path=path)[0], 200)
+        self.thread.join(timeout=3)
+        self.assertFalse(self.thread.is_alive())
+        self.assertTrue(self.engine.shutdown.is_set())
+        self.assertTrue(self.engine.stop.is_set())
+        self.assertEqual(self.engine.public()['config'], before)
+        self.assertEqual(self.engine.client.tokens['access'], 'test-access')
+        with self.assertRaises(BackupError):
+            self.engine.start('preview')
+        with self.assertRaises(BackupError):
+            self.engine.browse()
+
+    def test_shutdown_rejects_open_folder_chooser_and_can_be_retried(self):
+        with self.engine.browse_lock:
+            self.assertEqual(self.post(b'{"confirm":true}', path='/api/backup/shutdown')[0], 409)
+        self.assertFalse(self.server.exit_requested.is_set())
+        self.assertEqual(self.post(b'{"confirm":true}', path='/api/backup/shutdown')[0], 200)
+        self.thread.join(timeout=3)
+        self.assertFalse(self.thread.is_alive())
+
+    def test_shutdown_cancels_busy_run_and_preserves_completed_files(self):
+        source = Path(self.temp.name) / 'source'
+        source.mkdir()
+        for name in ['a.txt', 'b.txt', 'c.txt']:
+            (source / name).write_text('synthetic ' + name)
+        self.engine.save_config(self.engine.config | {'settleSeconds': 0,
+                                      'folders': [{'path': str(source)}]})
+        entered, release = threading.Event(), threading.Event()
+        snapshot = self.engine.snapshot
+        def staged(path, target):
+            if path.name == 'b.txt':
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError('test worker was not released')
+            return snapshot(path, target)
+        with patch.object(self.engine, 'snapshot', side_effect=staged):
+            self.engine.start('sync')
+            try:
+                self.assertTrue(entered.wait(5))
+                self.assertTrue(self.engine.state['busy'])
+                self.assertEqual(self.post(b'{"confirm":true}', path='/api/backup/shutdown')[0], 200)
+            finally:
+                release.set()
+            self.assertTrue(self.engine.work_lock.acquire(timeout=5))
+            self.engine.work_lock.release()
+        result = self.engine.state['lastResult']
+        self.assertFalse(result['ok'])
+        rows = self.engine.items({'run': result['id']})['items']
+        self.assertEqual({Path(x['path']).name: x['status'] for x in rows},
+                         {'a.txt': 'ok', 'b.txt': 'error', 'c.txt': 'error'})
+        self.assertEqual(self.engine.client.uploads, 1)

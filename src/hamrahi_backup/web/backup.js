@@ -10,7 +10,7 @@ const size = n => {
 };
 const date = v => v ? new Date(v).toLocaleString('fa-IR', {dateStyle:'short', timeStyle:'short'}) : '—';
 let model = null, folders = [], dirty = false, initialized = false, captcha = {};
-let activeRequests = 0, lastBusy = false, messageTimer, polling = false;
+let activeRequests = 0, lastBusy = false, messageTimer, polling = false, closing = false;
 const views = {run: {run:null, offset:0, sequence:0}, report: {run:null, offset:0, sequence:0}};
 
 function showPage(page) {
@@ -25,6 +25,7 @@ function showPage(page) {
   if (page === 'reports' && views.report.run) loadItems('report').catch(error => message(error.message,true));
 }
 function message(text, error=false) {
+  if (closing) return;
   clearTimeout(messageTimer);
   $('message').textContent = text;
   $('message').className = error ? 'error' : '';
@@ -53,10 +54,11 @@ async function perform(button, work) {
   activeRequests++;
   renderControls();
   try { await work(); } catch (error) { message(error.message, true); }
-  finally { activeRequests--; await poll(); renderControls(); }
+  finally { activeRequests--; if (!closing) await poll(); renderControls(); }
 }
 function renderControls() {
-  const busy = !!model?.state.busy, pending = activeRequests > 0, auth = !!model?.authenticated;
+  const busy = !!model?.state.busy, pending = activeRequests > 0 || closing, auth = !!model?.authenticated;
+  $('shutdown').disabled = !initialized || pending;
   for (const id of ['preview','save','add-folder','browse','resume-sync','login','send-code','captcha-get']) $(id).disabled = !initialized || busy || pending;
   for (const id of ['sync','test','check-connection','logout']) $(id).disabled = busy || pending || !auth;
   for (const id of ['remote-root','interval','max-size','settle','automatic','verify','excludes','folder-path']) $(id).disabled = !initialized || busy || pending;
@@ -67,9 +69,9 @@ function renderControls() {
   $('pause-sync').disabled = pending;
   $('cancel').hidden = !busy;
   $('cancel').disabled = pending;
-  $('busy-tag').textContent = busy ? 'در حال اجرا' : 'آماده';
-  $('status-dot').classList.toggle('working', busy);
-  $('nav-spinner').hidden = !busy;
+  $('busy-tag').textContent = closing ? 'درخواست خروج ثبت شد' : busy ? 'در حال اجرا' : 'آماده';
+  $('status-dot').classList.toggle('working', busy && !closing);
+  $('nav-spinner').hidden = !busy || closing;
   document.querySelectorAll('[data-remove],[data-folder-enable],[data-retry]').forEach(el => el.disabled = busy || pending);
 }
 function renderFolders() {
@@ -149,19 +151,20 @@ async function loadItems(viewName) {
   renderControls();
 }
 async function poll() {
-  if (polling) return;
+  if (polling || closing) return;
   polling = true;
   try {
     const response = await fetch('/api/backup');
     if (!response.ok) throw Error('دریافت وضعیت ممکن نشد.');
     model = await response.json();
+    if (closing) return;
     if (!initialized) { populate(model.config); initialized = true; }
     if (lastBusy && !model.state.busy) message(model.state.errors[0] || model.state.phase, !!model.state.errors.length);
     lastBusy = model.state.busy;
     render();
     await loadItems('run');
     if (!$('report-detail').hidden) await loadItems('report');
-  } catch (error) { message('ارتباط با پنل محلی برقرار نشد؛ برنامه را بررسی کنید.', true); }
+  } catch (error) { if (!closing) message('ارتباط با پنل محلی برقرار نشد؛ برنامه را بررسی کنید.', true); }
   finally { polling = false; }
 }
 document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => showPage(button.dataset.page));
@@ -194,6 +197,16 @@ for (const action of ['logout','pause','resume','cancel']) {
   $(id).onclick=()=>perform($(id),async()=>message((await api(action)).message));
 }
 $('save').onclick=()=>perform($('save'),save);
+$('shutdown').onclick=()=>perform($('shutdown'),async()=>{
+  const warning = dirty ? 'تغییرات ذخیره‌نشده از دست می‌رود. ' : '';
+  if (!window.confirm(warning + 'برنامه بسته شود؟ کار جاری متوقف می‌شود و تا اجرای دوباره سینک انجام نمی‌شود.')) return;
+  const result=await api('shutdown',{confirm:true});
+  closing=true; dirty=false;
+  clearTimeout(messageTimer);
+  $('save-bar').hidden=true; $('message').hidden=true;
+  $('exit-state').textContent=result.message + ' برای اتصال دوباره، برنامه را اجرا کنید.';
+  $('exit-state').hidden=false;
+});
 $('browse').onclick=()=>perform($('browse'),async()=>{
   message('پنجرهٔ انتخاب پوشه باز است.'); const r=await api('browse');
   if (r.path) { $('folder-path').value=r.path; message('پوشه انتخاب شد؛ «افزودن» را بزنید.'); }

@@ -46,7 +46,8 @@ export async function runWebChecks() {
     startup:{supported:true,registered:false,error:null},
     state:{busy:false,phase:'آماده',connection:null,lastTest:null,uploaded:0,skipped:0,bytes:0,
       errors:[],steps:[],lastResult:result,runId:run}};
-  const calls=[];
+  const calls=[], confirmations=[];
+  let confirmExit=false;
   const path='C:\\example\\<img src=x onerror=attack>".txt';
   const fetch = async (url,options) => {
     if (!options) return {ok:true,json:async()=>structuredClone(model)};
@@ -62,7 +63,8 @@ export async function runWebChecks() {
       items:[{path,status:'error',bytes:10,error:'synthetic failure'}]})};
     return {ok:true,json:async()=>({started:true,message:'OK'})};
   };
-  const context=vm.createContext({document,window:{addEventListener(){}},location:{hash:''},
+  const context=vm.createContext({document,window:{addEventListener(){},
+    confirm: text=>{confirmations.push(text);return confirmExit;}},location:{hash:''},
     fetch,Intl,Date,structuredClone,setTimeout:()=>0,clearTimeout(){},setInterval(){}});
   new vm.Script(source,{filename:'backup.js'}).runInContext(context);
   const settle=async()=>{for(let i=0;i<5;i++)await new Promise(setImmediate);};
@@ -95,7 +97,23 @@ export async function runWebChecks() {
   assert(elements.get('folder-list').innerHTML.includes('Original Name'));
   await elements.get('save').onclick();
   assert.equal(calls.filter(c=>c.action==='config').at(-1).data.folders[0].name,'Original Name');
-  return 'UI controller checks passed: pages, settings, save/CSRF, file links, escaping, retry and folder naming.';
+  elements.get('remote-root').value='UNSAVED';
+  elements.get('remote-root').listeners.input();
+  const savesBeforeExit=calls.filter(c=>c.action==='config').length;
+  await elements.get('shutdown').onclick();
+  assert(!calls.some(c=>c.action==='shutdown'),'Cancelling confirmation must keep the app running');
+  assert(confirmations[0].includes('ذخیره‌نشده'),'Exit must warn about unsaved changes');
+  assert(!elements.get('save-bar').hidden);
+  confirmExit=true;
+  await elements.get('shutdown').onclick();
+  assert.equal(calls.filter(c=>c.action==='shutdown').length,1);
+  assert.equal(calls.at(-1).data.confirm,true);
+  assert.equal(calls.filter(c=>c.action==='config').length,savesBeforeExit,'Exit must not silently save edits');
+  assert(!elements.get('exit-state').hidden,'Show a persistent exit acknowledgement');
+  assert(elements.get('shutdown').disabled);
+  assert(elements.get('save').disabled);
+  assert(elements.get('save-bar').hidden);
+  return 'UI controller checks passed: pages, settings, save/CSRF, file links, escaping, retry, folder naming and confirmed shutdown.';
 }
 
 if (process.argv?.[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

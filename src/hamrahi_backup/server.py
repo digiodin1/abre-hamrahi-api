@@ -26,12 +26,25 @@ class PanelServer(ThreadingHTTPServer):
     def __init__(self, manager, port=8765):
         self.manager = manager
         self.csrf = secrets.token_urlsafe(32)
+        self.exit_requested = threading.Event()
         self.slots = threading.BoundedSemaphore(16)
         self.assets = {path: (files('hamrahi_backup').joinpath('web', name).read_bytes(), mime)
                        for path, (name, mime) in ASSETS.items()}
         super().__init__(('127.0.0.1', port), Handler)
         self.hosts = {f'127.0.0.1:{self.server_port}', f'localhost:{self.server_port}'}
         self.origins = {'http://' + host for host in self.hosts}
+
+    def request_exit(self):
+        with self.manager.lock:
+            if self.manager.browse_lock.locked():
+                raise BackupError('ابتدا پنجرهٔ انتخاب پوشه را ببندید، سپس دوباره خروج را بزنید.', 409)
+            self.exit_requested.set()
+            # Prevent new scheduler/worker starts before returning the response.
+            # CLI cleanup waits for the worker and releases the instance lock.
+            self.manager.shutdown.set()
+            self.manager.stop.set()
+        return {'shuttingDown': True,
+                'message': 'درخواست خروج ثبت شد؛ پس از پایان درخواست جاری برنامه بسته می‌شود.'}
 
     def process_request(self, request, address):
         if not self.slots.acquire(False):
@@ -103,7 +116,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/api/backup':
             self.reply(200, self.server.manager.public() | {'csrfToken': self.server.csrf})
         elif self.path == '/api/status':
-            self.reply(200, {'app': 'abre-hamrahi-api', 'status': 'ready'})
+            self.reply(200, {'app': 'abre-hamrahi-api',
+                            'status': 'shutting-down' if self.server.exit_requested.is_set() else 'ready'})
         elif self.path in self.server.assets:
             body, mime = self.server.assets[self.path]
             self.reply(200, body, mime)
@@ -142,6 +156,20 @@ class Handler(BaseHTTPRequestHandler):
             if not self.path.startswith(prefix):
                 raise BackupError('مسیر یافت نشد.', 404)
             action = self.path[len(prefix):]
+            if self.server.exit_requested.is_set():
+                raise BackupError('برنامه در حال بسته‌شدن است؛ پس از اجرای دوباره تلاش کنید.', 503)
+            if action == 'shutdown':
+                if data.get('confirm') is not True:
+                    raise BackupError('خروج از برنامه باید صریحاً تأیید شود.')
+                result = self.server.request_exit()
+                try:
+                    self.reply(200, result)
+                finally:
+                    # shutdown() must run outside the serve_forever thread, and
+                    # only after the caller has received its acknowledgement.
+                    threading.Thread(target=self.server.shutdown, daemon=True,
+                                     name='panel-shutdown').start()
+                return
             result = self.server.manager.browse() if action == 'browse' else self.server.manager.handle(action, data)
             self.reply(200, result)
         except BackupError as error:

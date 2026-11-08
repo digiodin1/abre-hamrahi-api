@@ -2,7 +2,7 @@
 
 Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, preserves their original file names, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
-Version **1.1.0** preserves original file names and keeps verified predecessors in separate history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
+Version **1.2.0** adds confirmed graceful exit in Settings and the local API, while preserving original file names and separate verified history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
 
 The project is intentionally conservative:
 
@@ -31,6 +31,8 @@ abre-hamrahi-api
 ```
 
 The command opens the local panel in your default browser. The process must remain running for scheduled work; the browser does not. Use `abre-hamrahi-api --no-browser` on a machine where you want to open the panel yourself. The compatibility command `abr-hamrahi-api` remains available. The default private state directory is `%LOCALAPPDATA%\AbrHamrahiAPI`; it is outside the installed package.
+
+Use **Settings → Exit application** to stop the background process. Confirming requests cancellation of active work and waits for bounded cleanup; saved settings, login and completed backups remain available on the next launch. Closing a browser tab alone keeps the process running. The [local API reference](docs/local-api.md) documents the protected shutdown endpoint. Exit does not remove an existing Windows sign-in startup entry.
 
 For a portable or test directory:
 

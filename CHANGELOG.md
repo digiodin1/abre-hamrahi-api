@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 - 2026-11-08
+
+- Add a confirmed Exit application button in Settings and a protected local `shutdown` API action.
+- Stop new work, cancel active backups cooperatively, and preserve completed records, settings and login during cleanup.
+- Reject exit while a folder chooser is open; prevent a chooser from starting after exit is requested.
+- Keep an exit acknowledgement visible and stop UI polling after the request succeeds.
+- Test cancellation during an active transfer, HTTP trust boundaries, UI confirmation, real process exit and reopening saved state.
+
 ## 1.1.0 - 2026-11-08
 
 - Preserve original file names exactly; reject provider name changes instead of silently accepting them.
