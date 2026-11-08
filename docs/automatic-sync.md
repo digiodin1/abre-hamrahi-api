@@ -30,7 +30,7 @@ Failed automatic work remains pending. Retry delay grows from 5 seconds to a max
 
 The design references are Google's official [Drive for desktop guide](https://support.google.com/drive/answer/10838124?hl=en) and [streaming/mirroring guide](https://support.google.com/drive/answer/13401938?hl=en). They informed selected-folder management, reacting to edits, visible sync state, and pause/resume controls.
 
-This implementation provides one-way versioned backup. It does not provide cloud placeholders, streaming mounts, bidirectional conflict resolution, or automatic remote-to-local downloads. Local deletions and renames are reflected in a new manifest while old cloud objects remain available. Empty folders are not uploaded. Restore remains manual using the chosen version and its manifest.
+This implementation provides one-way versioned backup. It does not provide cloud placeholders, streaming mounts, bidirectional conflict resolution, or automatic remote-to-local downloads. Original file names are preserved; verified predecessors move to separate history when content changes. Unchanged files and manifests are reused. Local deletions and renames are reflected in a new manifest while old cloud objects remain available. Empty folders are not uploaded. Restore remains manual using the chosen version and its manifest. Read [names, migration, and history](names-and-history.md) before upgrading an older installation.
 
 Automation stops while Windows is asleep or the application is closed. On restart, a fresh pass is queued when automation is enabled; a saved pause remains respected. A continuously changing file can be deferred until it stabilizes. Polling can miss changes that preserve both size and modification time until the next full check.
 

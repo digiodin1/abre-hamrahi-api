@@ -43,6 +43,8 @@ class FakeCloud:
         return number
 
     def upload(self, path, name, parent, progress=lambda x: None, **kwargs):
+        if any(x['name'] == name for x in self.list_folder(parent)):
+            raise cb.BackupError('synthetic conflict', 409)
         self.uploads += 1
         number = self.next_id
         self.next_id += 1
@@ -50,6 +52,20 @@ class FakeCloud:
         obj = {'id': number, 'name': name, 'parent': parent, 'size': len(data), 'key': 'object', 'data': data}
         self.objects[number] = obj
         return obj
+
+    def rename(self, object_id, name):
+        obj = self.objects[object_id]
+        if any(x['name'] == name and x['id'] != object_id for x in self.list_folder(obj['parent'])):
+            raise cb.BackupError('synthetic conflict', 409)
+        obj['name'] = name
+        return dict(obj)
+
+    def move(self, object_id, parent):
+        obj = self.objects[object_id]
+        if any(x['name'] == obj['name'] and x['id'] != object_id for x in self.list_folder(parent)):
+            raise cb.BackupError('synthetic conflict', 409)
+        obj['parent'] = parent
+        return dict(obj)
 
     def verify(self, number, digest, size, **kwargs):
         self.verifications += 1
@@ -257,7 +273,7 @@ class ClientTests(unittest.TestCase):
             if endpoint.endswith('start-upload/'):
                 return {'signed_urls': ['https://storage.example/a', 'https://storage.example/b'], 'chunk_size': 6, 'key': 'k', 'upload_id': 'u'}
             complete.append(payload)
-            return {'id': 1, 'size': 10}
+            return {'id': 1, 'size': 10, 'name': 'test.txt', 'parent': 7}
         def opened(request, timeout):
             self.assertNotIn('Authorization', request.headers)
             calls.append(b''.join(request.data))

@@ -1,8 +1,8 @@
 # Abre Hamrahi API
 
-Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, creates a content-addressed filename, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
+Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, preserves their original file names, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
-Version **1.0.0** is the first main release. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
+Version **1.1.0** preserves original file names and keeps verified predecessors in separate history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
 
 The project is intentionally conservative:
 
@@ -54,7 +54,7 @@ Automatic sync can be paused and resumed from the panel. If the computer is offl
 
 **Automatic sync** is the master switch for the periodic reconciliation. **Also start when files change** adds the faster change trigger; it is available only when automatic sync is enabled. Neither setting starts the application after Windows logon. Enable **Run at Windows sign-in** in Settings and save to register the current interpreter, state directory, and port under the current user's Windows Run key. Turn it off and save before uninstalling or moving the installation. It starts without a browser and requires no administrator privileges.
 
-New cloud roots default to the computer name. Source folders and nested folders retain their exact names; there is no cloud alias. Two selected source folders cannot share a name. The 1.0 layout removes the suffixes used by 0.2, so the first sync after upgrading can create another cloud copy; existing backups are retained. If the provider rejects a folder name, the error is reported instead of silently renaming it.
+New cloud roots default to the computer name. Source folders, nested folders, and files retain their exact names; there is no cloud alias. Two selected source folders cannot share a name. The updated layout migrates indexed legacy names in place after verification and stops if old and new trees conflict. If the provider rejects or changes a name, the error is reported instead of silently renaming it. See [names, migration, and history](docs/names-and-history.md) before upgrading.
 
 The Processing page shows stages and every eligible file in pages of 100, with errors first. Retry beside a failed file processes only that file and generates a partial manifest. It does not acknowledge unrelated pending changes. Reports retain the last 30 runs, including file results and partial successes. An interrupted run is recovered at the next start. File links select the recorded local file in Windows Explorer; they never execute arbitrary files. Removed, excluded, disabled, or linked source paths cannot be opened or retried through this API.
 
@@ -62,7 +62,7 @@ See [automatic sync and desktop behavior](docs/automatic-sync.md) for settings, 
 
 The [local API reference](docs/local-api.md) documents file reports, retries, startup settings, and request protections.
 
-The service keeps old versions in the cloud. A local deletion does not delete cloud history. Restore is deliberately manual: download the chosen object and use the generated manifest to map its relative path and hash back to the source folder.
+Changed files move their verified predecessors into `_abre-backup-data/history` before the new content is uploaded with its original name. There are no overwrite or delete requests. Interrupted transfers can leave the current location empty until retry; the previous bytes remain in history. Unchanged files and manifests are reused. Identical source files with different names remain separate paths. Restore is deliberately manual: download the chosen object and use the manifest to map its relative path and hash back to the source folder.
 
 ## Safety and privacy
 

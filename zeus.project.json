@@ -2,7 +2,7 @@
   "name": "abre-hamrahi-api",
   "owner": "internal",
   "kind": "local-backup-panel",
-  "description": "Loopback-only local panel for versioned backups to Abrehamrahi",
+  "description": "Loopback-only backup panel with exact file names, verified history, and legacy layout migration",
   "entrypoints": [
     "src/hamrahi_backup/cli.py",
     "src/hamrahi_backup/server.py",

@@ -30,6 +30,7 @@ import uuid
 
 from .watcher import ChangeMonitor, relevant_path
 from .startup import StartupRegistration
+from .layout import CloudLayout, METADATA
 
 API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = ['.git', 'node_modules', '.venv', 'venv', '__pycache__',
@@ -317,8 +318,38 @@ class HamrahiClient:
         result = matches[0] if matches else self._json('POST', 'v2/flat/create-folder/', {'name': name, 'parent': parent})
         if not isinstance(result.get('id'), int):
             raise BackupError('شناسهٔ پوشهٔ ابری معتبر نیست.')
+        if result.get('name') != name or result.get('parent') != parent:
+            raise BackupError('سرویس نام یا محل پوشه را عیناً حفظ نکرد؛ عملیات تأیید نشد.', 503)
         cache[key] = result['id']
         return result['id']
+
+    def relocate(self, object_id, field, value):
+        """Reconcile an ambiguous mutation by reading, never by replaying it."""
+        before = self._json('GET', f'v2/flat/get-object/{int(object_id)}/')
+        if before.get('id') != object_id:
+            raise BackupError('شناسهٔ شیء مقصد قابل تأیید نیست.', 503)
+        if before.get(field) == value:
+            return before
+        endpoint, payload = ('rename-object/', {'obj_id': object_id, 'name': value}) if field == 'name' else (
+            'move-object/', {'source_obj_id': object_id, 'target_parent_id': value})
+        failure = None
+        try:
+            self._json('POST', 'v2/rgw/' + endpoint, payload)
+        except BackupError as error:
+            failure = error
+        after = self._json('GET', f'v2/flat/get-object/{int(object_id)}/')
+        other = 'parent' if field == 'name' else 'name'
+        if (after.get('id') != object_id or after.get(field) != value
+                or after.get(other) != before.get(other) or after.get('key') != before.get('key')
+                or after.get('size') != before.get('size')):
+            raise failure or BackupError('تغییر نام یا انتقال شیء ابری تأیید نشد؛ عملیات متوقف شد.', 503)
+        return after
+
+    def rename(self, object_id, name):
+        return self.relocate(object_id, 'name', name)
+
+    def move(self, object_id, parent):
+        return self.relocate(object_id, 'parent', parent)
 
     def upload(self, path, name, parent, progress=lambda value: None, cancelled=lambda: None):
         cancelled()
@@ -361,6 +392,8 @@ class HamrahiClient:
             raise BackupError('تأیید نهایی فایل ابری قابل شناسایی نیست.')
         if int(result.get('size', -1)) != size:
             raise BackupError('اندازهٔ فایل ابری با فایل ارسالی برابر نیست.')
+        if result.get('name') != name or result.get('parent') != parent:
+            raise BackupError('سرویس نام یا محل فایل را عیناً حفظ نکرد؛ عملیات تأیید نشد.', 503)
         return result
 
     def verify(self, object_id, expected_hash, expected_size, cancelled=lambda: None):
@@ -525,6 +558,8 @@ class BackupManager:
             ids.add(job_id)
             # Never rewrite the source folder's name or append an internal ID.
             name = resolved.name
+            if name.casefold() == METADATA.casefold():
+                raise BackupError('این نام برای تاریخچهٔ داخلی برنامه رزرو شده است: ' + METADATA)
             if not name or name.casefold() in names:
                 raise BackupError('نام پوشه‌های انتخابی باید متمایز باشد؛ دو پوشهٔ هم‌نام در مقصد ادغام نمی‌شوند.')
             names.add(name.casefold())
@@ -578,7 +613,7 @@ class BackupManager:
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
                                           'startup': self.startup.status(),
-                                          'provider': {'experimental': False, 'release': '1.0.0', 'checkedOn': '2026-11-04',
+                                          'provider': {'experimental': False, 'release': '1.1.0', 'checkedOn': '2026-11-07',
                                                        'mode': 'one-way-versioned'}}))
 
     def update(self, **values):
@@ -902,13 +937,9 @@ class BackupManager:
             raise BackupError('فایل انتخابی پیش از تلاش مجدد حذف یا جابه‌جا شده است.')
         self.step('scan', 'error' if result['errors'] else 'ok')
         self.step('transfer')
-        folders_cache, remote_cache = {}, {}
-        def remote_parent(job, relative):
-            parent = self.client.folder(config['remoteRoot'], None, folders_cache)
-            parent = self.client.folder(job['name'], parent, folders_cache)
-            for part in relative.parts[:-1]:
-                parent = self.client.folder(part, parent, folders_cache)
-            return parent
+        remote_cache = {}
+        layout = CloudLayout(self.client, config['remoteRoot'], BackupError, cloud_name, self.cancelled)
+        remote_parent = layout.parent
         with tempfile.TemporaryDirectory(prefix='staging-', dir=self.state_dir) as staging:
             staged = Path(staging) / 'file'
             manifests = []
@@ -926,19 +957,25 @@ class BackupManager:
                         if size > config['maxFileMiB'] * 1048576:
                             raise BackupError('snapshot از سقف اندازه بزرگ‌تر است: ' + str(path))
                         with self.db() as db:
-                            old = db.execute('SELECT sha,remote_id,remote_name FROM files WHERE job=? AND rel=?', (job['id'], relative.as_posix())).fetchone()
-                        suffix = '.' + cloud_name(path.suffix[1:]) if path.suffix else ''
-                        filename = cloud_name(path.stem)[:120] + '__' + digest[:20] + suffix
+                            old = db.execute('SELECT sha,remote_id,remote_name,size FROM files WHERE job=? AND rel=?', (job['id'], relative.as_posix())).fetchone()
+                        filename = path.name
                         object_id, exists = None, False
                         if not preview:
                             parent = remote_parent(job, relative)
                             if parent not in remote_cache:
-                                listing = self.client.list_folder(parent)
-                                names = [item['name'] for item in listing]
-                                if len(names) != len(set(names)):
-                                    raise BackupError('نام تکراری در پوشهٔ ابری وجود دارد؛ انتخاب خودکار امن نیست.')
-                                remote_cache[parent] = dict(zip(names, listing))
-                            remote = remote_cache[parent].get(filename)
+                                remote_cache[parent] = layout.listing(parent)
+                            remote = layout.adopt_legacy(parent, filename, old, remote_cache[parent])
+                            if remote and old and old[1] == remote['id'] and old[0] != digest:
+                                if remaining is not None and size > remaining:
+                                    raise BackupError('ظرفیت باقی‌ماندهٔ حساب برای این فایل کافی نیست.', 413)
+                                self.update(phase='بررسی و انتقال نسخهٔ قبلی به تاریخچه', fileStage='verify')
+                                layout.archive(job, relative, remote, old)
+                                remote_cache[parent].pop(filename, None)
+                                remote = None
+                            if not remote and old:
+                                remote = layout.restore_version(job, relative, digest, size, parent)
+                                if remote:
+                                    remote_cache[parent][filename] = remote
                             if remote:
                                 if int(remote.get('size', -1)) != size or not remote.get('key'):
                                     raise BackupError('نسخهٔ ابری هم‌نام با اندازهٔ ناسازگار وجود دارد: ' + str(relative))
@@ -998,13 +1035,18 @@ class BackupManager:
                     self.cancelled()
                     self.update(phase='ذخیرهٔ فهرست بازیابی', current=job['path'], fileStage=None)
                     manifest_file = Path(staging) / 'manifest.json'
-                    atomic_json(manifest_file, {'schema': 1, 'at': result['at'],
-                                                'folder': job['name'], 'files': manifest, 'errorCount': len(errors),
+                    atomic_json(manifest_file, {'schema': 2,
+                                                'folder': job['name'], 'files': sorted(manifest, key=lambda x: x['path']), 'errorCount': len(errors),
                                                 'exclude': config['exclude'], 'mode': 'one-way-versioned',
                                                 'partial': bool(only_paths)})
-                    name = '_manifest-' + dt.datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8] + '.json'
-                    parent = remote_parent(job, Path('manifest.json'))
-                    obj = self.client.upload(manifest_file, name, parent, cancelled=self.cancelled)
+                    digest = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+                    name = '_manifest-' + digest + '.json'
+                    parent = layout.manifests(job)
+                    obj = layout.listing(parent).get(name)
+                    if not obj:
+                        obj = self.client.upload(manifest_file, name, parent, cancelled=self.cancelled)
+                    if not obj.get('key'):
+                        raise BackupError('فهرست بازیابی مقصد با یک پوشه تعارض دارد.')
                     if config['verifyUploads']:
                         self.client.verify(obj['id'], hashlib.sha256(manifest_file.read_bytes()).hexdigest(), manifest_file.stat().st_size, cancelled=self.cancelled)
                     result['manifests'].append({'folder': job['name'], 'remoteId': obj['id'], 'name': name})

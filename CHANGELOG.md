@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 - 2026-11-08
+
+- Preserve original file names exactly; reject provider name changes instead of silently accepting them.
+- Migrate indexed legacy folder/file names in place, with full file hash checks and conflict stops.
+- Move verified predecessors into separate history without overwrite/delete; reuse archived content on reversion.
+- Reuse identical manifests and keep them outside the visible source tree.
+- Reconcile ambiguous rename/move responses with reads; stop rather than blindly replay a write.
+- Document source copies versus content versions and safe review of existing duplicates.
+- Verify legacy rename, both content versions, and unchanged-run reuse against isolated synthetic data on the real provider (November 7, 2026).
+
+Stop the old process and preserve the private index before upgrading. Both old and new trees already existing together require manual review; migration does not merge or delete them.
+
 ## 1.0.0 - 2026-11-05
 
 - Separate account, folders, settings, processing, and reports pages.
