@@ -7,6 +7,10 @@ import subprocess
 from .runtime import command as runtime_command
 
 
+class StartupPathError(OSError):
+    pass
+
+
 class StartupRegistration:
     def __init__(self, data_dir, port):
         self.data_dir = Path(data_dir).resolve()
@@ -27,7 +31,7 @@ class StartupRegistration:
                     parts[index] = buffer.value
             command = subprocess.list2cmdline(parts)
         if len(command) > 260:
-            raise OSError('Startup command is too long; use a shorter installation or data path')
+            raise StartupPathError('Startup command is too long; use a shorter installation or data path')
         return command
 
     def read(self):

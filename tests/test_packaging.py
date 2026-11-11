@@ -6,12 +6,25 @@ import unittest
 from unittest.mock import Mock, patch
 
 from hamrahi_backup import runtime
-from hamrahi_backup.engine import BackupManager
-from hamrahi_backup.startup import StartupRegistration
+from hamrahi_backup.engine import BackupError, BackupManager
+from hamrahi_backup.startup import StartupRegistration, StartupPathError
 from test_engine import FakeCloud
 
 
 class PackagingTests(unittest.TestCase):
+    def test_overlong_startup_has_actionable_error_and_preserves_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = BackupManager(Path(directory), FakeCloud())
+            before = manager.config_path.read_bytes() if manager.config_path.exists() else None
+            try:
+                with patch.object(manager.startup, 'read', return_value=None), patch.object(manager.startup, 'configure', side_effect=StartupPathError()):
+                    with self.assertRaisesRegex(BackupError, '۲۶۰'):
+                        manager.save_config(manager.config | {'startupEnabled': True})
+                self.assertFalse(manager.config['startupEnabled'])
+                self.assertEqual(manager.config_path.read_bytes() if manager.config_path.exists() else None, before)
+            finally:
+                manager.close()
+
     def test_frozen_commands_use_self_executable_and_absolute_private_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

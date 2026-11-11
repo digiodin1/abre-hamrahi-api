@@ -38,7 +38,7 @@ def main():
     sys.path.insert(0, str(repo / 'src'))
     qa = repo / '.qa' / 'windows-package-check'
     qa.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix='run-', dir=qa))
+    root = Path(tempfile.mkdtemp(prefix='wp-', dir=repo / '.qa'))
     env = {key: value for key, value in os.environ.items() if key not in ('PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV')}
     env['PATH'] = str(Path(os.environ['SYSTEMROOT']) / 'System32')
     env['LOCALAPPDATA'] = str(root / 'isolated-profile')
@@ -246,6 +246,7 @@ def main():
         report = {'passed': success, 'checks': checks,
                   'installerSHA256': hashlib.sha256(installer.read_bytes()).hexdigest()}
         (root / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+        (qa / 'latest.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(report))
 
 

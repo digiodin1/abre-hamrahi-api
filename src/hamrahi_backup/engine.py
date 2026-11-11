@@ -29,7 +29,7 @@ import urllib.request
 import uuid
 
 from .watcher import ChangeMonitor, relevant_path
-from .startup import StartupRegistration
+from .startup import StartupRegistration, StartupPathError
 from .layout import CloudLayout, METADATA
 
 API = 'https://abrehamrahi.ir/api/'
@@ -591,6 +591,8 @@ class BackupManager:
             if startup_changed:
                 try:
                     self.startup.configure(result['startupEnabled'])
+                except StartupPathError:
+                    raise BackupError('فرمان استارتاپ از محدودیت ۲۶۰ کاراکتری ویندوز بیشتر است؛ مسیر نصب یا پوشهٔ تنظیمات کوتاه‌تری انتخاب کنید. تنظیمات ذخیره نشد.') from None
                 except OSError:
                     raise BackupError('ثبت اجرای خودکار ویندوز ناموفق بود؛ تنظیمات ذخیره نشد.') from None
             try:
