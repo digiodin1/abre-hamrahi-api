@@ -2,7 +2,7 @@
 
 Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, preserves their original file names, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
-Version **1.3.0** adds a start-or-open desktop launcher, affected-file sync and resilient scheduling, while preserving original file names and separate verified history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
+Version **1.4.0** adds a self-contained Windows installer and portable bundle, plus clear per-file failure reasons, automatic recovery status and file-count progress with readable size units. It includes a start-or-open desktop launcher, affected-file sync and resilient scheduling, while preserving original file names and separate verified history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
 
 The project is intentionally conservative:
 
@@ -96,3 +96,5 @@ With Node.js 18 or newer, run `node tests/web_checks.mjs` for dependency-free UI
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Windows users can install without Python: see [Windows installer and portable package](docs/windows-install.md).

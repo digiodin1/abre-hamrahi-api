@@ -3,8 +3,8 @@ const $ = id => document.getElementById(id);
 const nf = new Intl.NumberFormat('fa-IR');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const size = n => {
-  if (!n) return '۰ B';
-  const units = ['B','KiB','MiB','GiB','TiB'];
+  if (!n || n < 0) return '۰ بایت';
+  const units = ['بایت','کیلوبایت','مگابایت','گیگابایت','ترابایت'];
   const i = Math.min(4, Math.floor(Math.log(n) / Math.log(1024)));
   return nf.format(Math.round(n / 1024 ** i * 10) / 10) + ' ' + units[i];
 };
@@ -42,10 +42,12 @@ async function api(action, data={}) {
   const response = await fetch('/api/backup/' + action, {method:'POST', headers:{
     'Content-Type':'application/json', 'X-Abr-Hamrahi-CSRF':model?.csrfToken || ''
   }, body:JSON.stringify(data)});
-  const result = await response.json();
+  let result;
+  try { result = await response.json(); }
+  catch { throw Error(`پاسخ پنل قابل خواندن نیست (HTTP ${response.status})؛ دوباره تلاش کنید.`); }
   if (!response.ok) {
     if (result.captcha) $('captcha-details').open = true;
-    throw Error(result.error || 'درخواست ناموفق بود.');
+    throw Error(result.error || `درخواست ناموفق بود (HTTP ${response.status}).`);
   }
   return result;
 }
@@ -114,6 +116,16 @@ function renderProgress(s) {
   const stages = [['snapshot','نسخهٔ موقت'], ...(s.action !== 'preview' ? [['upload','ارسال'], ...(model.config.verifyUploads ? [['verify','بررسی صحت']] : [])] : []), ['record','ثبت']];
   const current = stages.findIndex(step => step[0] === s.fileStage);
   $('file-stages').innerHTML = s.busy && current >= 0 ? stages.map(([key,label], i) => `<span class="${i<current?'success':''}">${i<current?'✓ ':i===current?'◌ ':''}${label}</span>`).join(' ← ') : '';
+  const p = s.progress || {}, known = p.total > 0;
+  const bar = $('overall-progress');
+  bar.max = 100;
+  if (known) bar.value = p.percent; else bar.removeAttribute('value');
+  bar.hidden = !s.busy && !known;
+  bar.classList.toggle('has-errors', !!p.failed || !!p.waiting);
+  $('progress-percent').textContent = known ? nf.format(p.percent) + '٪' : s.busy ? 'در حال آماده‌سازی…' : '';
+  $('progress-detail').textContent = known ? `${nf.format(p.done)} از ${nf.format(p.total)} فایل بررسی شده در این نوبت` + (p.failed ? ` · ${nf.format(p.failed)} خطا` : '') + (p.waiting ? ` · ${nf.format(p.waiting)} در انتظار ادامه` : '') : '';
+  const recovery = s.recovery || {};
+  $('recovery-state').textContent = recovery.attempt ? (recovery.enabled ? (s.busy ? 'تلاش مجدد خودکار در حال اجراست؛ فایل‌های موفق قبلی دوباره بارگذاری نمی‌شوند.' : `ادامهٔ خودکار پس از خطا: ${date(recovery.retryAt * 1000)} · تلاش ${nf.format(recovery.attempt)}`) : 'ادامهٔ خودکار متوقف است؛ برای ادامه «شروع / ادامهٔ پشتیبان‌گیری» را بزنید.') : '';
 }
 function render() {
   const s = model.state, c = model.config, connection = s.connection;
@@ -131,7 +143,8 @@ function render() {
   $('startup-state').textContent = model.startup.error || (model.startup.registered ? 'اجرای خودکار ویندوز فعال است.' : c.startupEnabled ? 'ثبت ویندوز در دسترس نیست؛ گزینه را خاموش و دوباره روشن کنید.' : '');
   renderProgress(s);
   $('run-counts').innerHTML = `<span>${s.action==='preview'?'نیاز به ارسال':'ارسال‌شده'}: <b>${nf.format(s.uploaded)}</b></span><span>بدون تغییر: <b>${nf.format(s.skipped)}</b></span><span>حجم: <b dir="ltr">${size(s.bytes)}</b></span>`;
-  errorParagraphs($('errors'), [...(model.error?[model.error]:[]), ...(s.watchError?[s.watchError]:[]), ...s.errors]);
+  const previousErrors = s.busy && s.lastResult && !s.lastResult.ok ? s.lastResult.errors.map(text => 'خطای نوبت قبل: ' + text) : [];
+  errorParagraphs($('errors'), [...new Set([...(model.error?[model.error]:[]), ...(s.watchError?[s.watchError]:[]), ...s.errors, ...previousErrors])]);
   const result = s.lastResult;
   $('result').textContent = result ? `${result.preview?'پیش‌نمایش':'آخرین ارسال'} · ${date(result.at)} · ${nf.format(result.excluded)} استثنا` : '';
   const run = s.busy ? s.runId : result?.id;
@@ -145,8 +158,10 @@ async function loadItems(viewName) {
   const sequence = ++view.sequence;
   const data = await api('items', {run:view.run, offset:view.offset, failedOnly:viewName==='report' && $('report-failed').checked});
   if (sequence !== view.sequence || data.run !== view.run) return;
-  const statuses = {queued:'در صف', processing:'در حال پردازش', ok:'✓ ارسال شد', unchanged:'✓ بدون تغییر', preview:'✓ آمادهٔ ارسال', error:'✕ خطا'};
-  container.innerHTML = `<div class="file-summary">${nf.format(data.total)} فایل <span class="muted">لینک هر فایل، محل آن را در ویندوز باز می‌کند.</span></div>` + (data.items.length ? `<div class="table-scroll"><table><thead><tr><th>فایل</th><th>حجم</th><th>وضعیت</th><th></th></tr></thead><tbody>${data.items.map(file=>`<tr><td class="path"><a href="#file" class="link" data-reveal data-run="${esc(data.run)}" data-path="${esc(file.path)}" title="نمایش فایل در پوشه">${esc(file.path)}</a>${file.error?`<p class="bad">${esc(file.error)}</p>`:''}</td><td dir="ltr">${size(file.bytes)}</td><td class="${file.status==='error'?'bad':['ok','unchanged'].includes(file.status)?'success':''}">${file.status==='processing'?'<span class="spinner"></span> ':''}${statuses[file.status]||esc(file.status)}</td><td>${file.status==='error'?`<button data-retry data-run="${esc(data.run)}" data-path="${esc(file.path)}">تلاش مجدد</button>`:''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">فایلی در این بخش نیست.</div>') + `<div class="pagination"><button data-prev="${viewName}" ${view.offset===0?'disabled':''}>قبلی</button><span>${nf.format(Math.floor(view.offset/100)+1)} / ${nf.format(Math.max(1,Math.ceil(data.total/100)))}</span><button data-next="${viewName}" ${view.offset+100>=data.total?'disabled':''}>بعدی</button></div>`;
+  const statuses = {queued:'در صف', deferred:'در انتظار ادامه', processing:'در حال پردازش', ok:'✓ ارسال شد', unchanged:'✓ بدون تغییر', preview:'✓ آمادهٔ ارسال', error:'✕ خطا'};
+  // Historic rows from older releases may have no stored explanation.
+  data.items = data.items.map(file => ({...file, error:file.error || (['error','deferred'].includes(file.status) ? 'جزئیات در نسخهٔ قبلی ثبت نشده است؛ خطای کلی همین نوبت را در گزارشات ببینید و دوباره تلاش کنید.' : '')}));
+  container.innerHTML = `<div class="file-summary">${nf.format(data.total)} فایل <span class="muted">لینک هر فایل، محل آن را در ویندوز باز می‌کند.</span></div>` + (data.items.length ? `<div class="table-scroll"><table><thead><tr><th>فایل</th><th>حجم</th><th>وضعیت</th><th></th></tr></thead><tbody>${data.items.map(file=>`<tr><td class="path"><a href="#file" class="link" data-reveal data-run="${esc(data.run)}" data-path="${esc(file.path)}" title="نمایش فایل در پوشه">${esc(file.path)}</a>${file.error?`<p class="bad">${esc(file.error)}</p>`:''}</td><td dir="ltr">${size(file.bytes)}</td><td class="${file.status==='error'?'bad':['ok','unchanged'].includes(file.status)?'success':''}">${file.status==='processing'?'<span class="spinner"></span> ':''}${statuses[file.status]||esc(file.status)}</td><td>${['error','deferred'].includes(file.status)?`<button data-retry data-run="${esc(data.run)}" data-path="${esc(file.path)}">تلاش مجدد</button>`:''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">فایلی در این بخش نیست.</div>') + `<div class="pagination"><button data-prev="${viewName}" ${view.offset===0?'disabled':''}>قبلی</button><span>${nf.format(Math.floor(view.offset/100)+1)} / ${nf.format(Math.max(1,Math.ceil(data.total/100)))}</span><button data-next="${viewName}" ${view.offset+100>=data.total?'disabled':''}>بعدی</button></div>`;
   view.items = data.items;
   renderControls();
 }
@@ -164,7 +179,7 @@ async function poll() {
     render();
     await loadItems('run');
     if (!$('report-detail').hidden) await loadItems('report');
-  } catch (error) { if (!closing) message('ارتباط با پنل محلی برقرار نشد؛ برنامه را بررسی کنید.', true); }
+  } catch (error) { if (!closing) message('دریافت وضعیت ناموفق بود: ' + error.message, true); }
   finally { polling = false; }
 }
 document.querySelectorAll('[data-page]').forEach(button => button.onclick = () => showPage(button.dataset.page));

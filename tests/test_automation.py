@@ -76,6 +76,42 @@ class AutomationTests(unittest.TestCase):
         self.assertCountEqual(data, [b'first', b'second'])
         self.assertEqual(self.engine.state['nextRun'], next_full)
 
+    def test_http_500_recovery_adopts_ambiguous_upload_without_duplicates(self):
+        for name in ('a.txt', 'b.txt', 'c.txt'):
+            (self.source / name).write_text('synthetic ' + name)
+        upload = self.fake.upload
+        failed = False
+        def interrupted(path, name, parent, **kwargs):
+            nonlocal failed
+            result = upload(path, name, parent, **kwargs)
+            if name == 'b.txt' and not failed:
+                failed = True
+                raise BackupError('پاسخ ناموفق ابرهمراهی؛ HTTP 500', 502)
+            return result
+        self.fake.upload = interrupted
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        state = self.engine.public()['state']
+        self.assertFalse(state['lastResult']['ok'])
+        self.assertEqual(state['recovery']['attempt'], 1)
+        self.assertEqual(state['progress'], {'total': 3, 'done': 2, 'failed': 1, 'waiting': 1, 'percent': 66.7})
+        rows = self.engine.items({'run': state['lastResult']['id'], 'failedOnly': True})['items']
+        self.assertEqual({Path(row['path']).name: row['status'] for row in rows}, {'b.txt': 'error', 'c.txt': 'deferred'})
+        self.assertTrue(all('HTTP 500' in row['error'] for row in rows))
+        pending_path = next(row['path'] for row in rows if row['status'] == 'deferred')
+        self.engine.selected_item({'run': state['lastResult']['id'], 'path': pending_path}, require_error=True)
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        state = self.engine.public()['state']
+        self.assertTrue(state['lastResult']['ok'])
+        self.assertEqual(state['progress']['percent'], 100)
+        self.assertEqual(state['recovery']['attempt'], 0)
+        files = [obj for obj in self.fake.objects.values() if obj.get('key') and not obj['name'].startswith('_manifest')]
+        self.assertCountEqual([obj['name'] for obj in files], ['a.txt', 'b.txt', 'c.txt'])
+        self.assertEqual(state['lastResult']['uploaded'], 1)
+
     def test_change_during_upload_remains_pending_for_another_run(self):
         target = self.source / 'hello.txt'
         target.write_text('first')

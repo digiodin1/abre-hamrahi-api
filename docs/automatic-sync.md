@@ -26,6 +26,10 @@ The native observer is optional: `python -m pip install ".[native]"`. Without it
 
 Failed automatic work remains pending. Retry delay grows from 5 seconds to a maximum of 5 minutes. No uploads run until an account session is available. The panel displays pending work, observation status, errors, and recent results. Cancel also pauses automatic uploads so the scheduler does not immediately restart cancelled work.
 
+The processing page shows file-count progress for the current pass, not network byte progress. Scanning and connection setup use an indeterminate indicator. A failed file has its reason beside it; files not attempted after a service outage are marked as waiting to continue. The previous pass's error remains visible while automatic recovery runs. Reports retain each pass and its per-file details. With automation off, use **Start / continue backup**, or retry an individual failed or deferred file after the current pass ends.
+
+Successful files are indexed locally. Recovery lists the cloud again and reuses matching verified content; it does not blindly replay an upload whose completion response was lost. HTTP 500 indicates a provider server failure, which the client cannot repair. Repeated failure therefore remains visible and retries stay bounded by the delay above. Reopening the application queues a full reconciliation when automation is enabled. Keep the application state directory to retain the index and history. Size units in the Persian panel are spelled out and use multiples of 1024 bytes.
+
 ## Desktop model and boundaries
 
 After an initial successful pass, existing-file edit notifications can create

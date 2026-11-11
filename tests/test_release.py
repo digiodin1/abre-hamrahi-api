@@ -117,7 +117,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result['uploaded'], 1)
         rows = self.manager.items({'run': result['id']})['items']
         self.assertEqual({Path(x['path']).name: x['status'] for x in rows},
-                         {'a.txt': 'ok', 'b.txt': 'error', 'c.txt': 'error'})
+                         {'a.txt': 'ok', 'b.txt': 'error', 'c.txt': 'deferred'})
         self.assertTrue(any(step['status'] == 'error' for step in self.manager.state['steps']))
         self.assertFalse((self.manager.state_dir / 'active-run.json').exists())
 

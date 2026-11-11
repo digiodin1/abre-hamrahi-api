@@ -4,7 +4,7 @@ import ctypes
 import os
 from pathlib import Path
 import subprocess
-import sys
+from .runtime import command as runtime_command
 
 
 class StartupRegistration:
@@ -14,18 +14,13 @@ class StartupRegistration:
         self.name = 'AbreHamrahiAPI-' + hashlib.sha256(str(self.data_dir).casefold().encode()).hexdigest()[:12]
 
     def command(self):
-        executable = Path(sys.executable)
-        if executable.with_name('pythonw.exe').is_file():
-            executable = executable.with_name('pythonw.exe')
-        runner = Path(__file__).with_name('startup_runner.py')
-        parts = [str(executable), str(runner), '--data-dir', str(self.data_dir),
-                 '--port', str(self.port), '--no-browser']
+        parts = runtime_command('serve', self.data_dir, self.port)
         command = subprocess.list2cmdline(parts[:])
         # Windows Run values support at most 260 characters. Try existing 8.3
         # paths before refusing a registration that Windows would silently skip.
         # https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys
         if len(command) > 260 and os.name == 'nt':
-            for index in (0, 1, 3):
+            for index in [position for position, part in enumerate(parts) if Path(part).is_absolute()]:
                 buffer = ctypes.create_unicode_buffer(32768)
                 length = ctypes.windll.kernel32.GetShortPathNameW(parts[index], buffer, len(buffer))
                 if 0 < length < len(buffer):

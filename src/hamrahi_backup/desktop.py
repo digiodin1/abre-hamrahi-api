@@ -4,13 +4,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
 import webbrowser
 
 from .cli import default_data_dir, instance_lock
+from .runtime import command as runtime_command
 
 
 def ready(port):
@@ -30,11 +30,7 @@ def open_panel(directory, port, open_browser=webbrowser.open, timeout=12):
     if ready(port):
         open_browser(url)
         return 0
-    executable = Path(sys.executable)
-    if os.name == 'nt' and executable.with_name('pythonw.exe').is_file():
-        executable = executable.with_name('pythonw.exe')
-    command = [str(executable), str(Path(__file__).with_name('startup_runner.py')),
-               '--data-dir', str(directory), '--port', str(port), '--no-browser']
+    command = runtime_command('serve', directory, port)
     child = None
     deadline = time.monotonic() + timeout
     try:

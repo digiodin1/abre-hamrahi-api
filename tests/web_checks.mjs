@@ -85,6 +85,8 @@ export async function runWebChecks() {
   assert.equal(panels.find(p=>!p.hidden).dataset.panel,'run');
   const rendered=elements.get('run-files').innerHTML;
   assert(rendered.includes('تلاش مجدد'));
+  assert(rendered.includes('synthetic failure'), 'Per-file failure reason must be visible');
+  assert(rendered.includes('بایت'), 'Size units must be readable');
   assert(rendered.includes('&lt;img'));
   assert(!rendered.includes('<img src=x'),'Filenames must be escaped as text and attributes');
   assert(rendered.includes('<a href="#file"'),'Every row must provide a local file link');
@@ -97,6 +99,16 @@ export async function runWebChecks() {
   assert(elements.get('folder-list').innerHTML.includes('Original Name'));
   await elements.get('save').onclick();
   assert.equal(calls.filter(c=>c.action==='config').at(-1).data.folders[0].name,'Original Name');
+  model.state.busy = true;
+  model.state.progress = {total:10, done:3, percent:30, failed:1, waiting:7};
+  model.state.recovery = {attempt:1, retryAt:1800000000, enabled:true};
+  await vm.runInContext('poll()', context);
+  assert.equal(elements.get('overall-progress').value,30);
+  assert(elements.get('progress-detail').textContent.includes('در انتظار ادامه'));
+  assert(elements.get('recovery-state').textContent.includes('تلاش مجدد خودکار'));
+  assert(elements.get('errors').children.some(p=>p.textContent.includes('synthetic error')), 'Previous failure must remain visible during recovery');
+  model.state.busy = false;
+  await vm.runInContext('poll()', context);
   elements.get('remote-root').value='UNSAVED';
   elements.get('remote-root').listeners.input();
   const savesBeforeExit=calls.filter(c=>c.action==='config').length;

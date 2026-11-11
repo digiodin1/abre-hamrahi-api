@@ -5,16 +5,20 @@ import tkinter
 from tkinter import filedialog
 
 
-def main():
+def choose_folder():
     root = tkinter.Tk()
     root.withdraw()
     root.attributes('-topmost', True)
     try:
         path = filedialog.askdirectory(parent=root, title='Abre Hamrahi API - Select a folder to sync', mustexist=True)
-        sys.stdout.buffer.write(json.dumps({'path': path or '', 'cancelled': not bool(path)}, ensure_ascii=False).encode('utf-8'))
-        sys.stdout.buffer.flush()
+        return {'path': path or '', 'cancelled': not bool(path)}
     finally:
         root.destroy()
+
+
+def main():
+    sys.stdout.buffer.write(json.dumps(choose_folder(), ensure_ascii=False).encode('utf-8'))
+    sys.stdout.buffer.flush()
 
 
 if __name__ == '__main__':

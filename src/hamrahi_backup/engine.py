@@ -614,11 +614,23 @@ class BackupManager:
     def public(self):
         with self.lock:
             self._refresh_automation()
+            run = self.state.get('runId') if self.state['busy'] else (self.state.get('lastResult') or {}).get('id')
+            counts = {}
+            if run:
+                with self.db() as db:
+                    counts = dict(db.execute('SELECT status,count(*) FROM run_items WHERE run=? GROUP BY status', (run,)))
+            total = sum(counts.values())
+            done = sum(counts.get(key, 0) for key in ('ok', 'unchanged', 'preview', 'error'))
+            self.state['progress'] = {'total': total, 'done': done, 'failed': counts.get('error', 0),
+                                      'waiting': counts.get('deferred', 0),
+                                      'percent': round(100 * done / total, 1) if total else None}
+            self.state['recovery'] = {'attempt': self.retry_attempt, 'retryAt': self.retry_at or None,
+                                      'enabled': self.config['automatic'] and not self.config['automaticPaused']}
             return json.loads(json.dumps({'config': self.config, 'state': self.state, 'history': self.history,
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
                                           'startup': self.startup.status(),
-                                          'provider': {'experimental': False, 'release': '1.3.0', 'checkedOn': '2026-11-07',
+                                          'provider': {'experimental': False, 'release': '1.4.0', 'checkedOn': '2026-11-07',
                                                        'mode': 'one-way-versioned'}}))
 
     def update(self, **values):
@@ -644,11 +656,11 @@ class BackupManager:
         if type(offset) is not int or not 0 <= offset <= 100000000:
             raise BackupError('شمارهٔ صفحه معتبر نیست.')
         failed_only = data.get('failedOnly', False) is True
-        where = 'run=?' + (" AND status='error'" if failed_only else '')
+        where = 'run=?' + (" AND status IN ('error','deferred')" if failed_only else '')
         with self.db() as db:
             total = db.execute('SELECT count(*) FROM run_items WHERE ' + where, (run,)).fetchone()[0]
             rows = db.execute('SELECT path,status,size,error,remote_id FROM run_items WHERE ' + where +
-                              " ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'processing' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,path LIMIT 100 OFFSET ?",
+                              " ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'processing' THEN 1 WHEN 'deferred' THEN 2 WHEN 'queued' THEN 3 ELSE 4 END,path LIMIT 100 OFFSET ?",
                               (run, offset)).fetchall()
         return {'run': run, 'offset': offset, 'total': total,
                 'items': [dict(zip(('path', 'status', 'bytes', 'error', 'remoteId'), row)) for row in rows]}
@@ -661,7 +673,7 @@ class BackupManager:
         with self.db() as db:
             row = db.execute('SELECT status FROM run_items WHERE run=? AND path=?', (run, raw)).fetchone()
         path = Path(raw)
-        if not row or (require_error and row[0] != 'error'):
+        if not row or (require_error and row[0] not in ('error', 'deferred')):
             raise BackupError('فایل خطادار در این گزارش پیدا نشد.', 404)
         if (not path.is_absolute() or not path.is_file() or is_link(path)
                 or any(is_link(parent) for parent in path.parents)
@@ -794,6 +806,10 @@ class BackupManager:
                         if message not in failed['errors']:
                             failed['errors'].append(message)
                         with self.db() as db:
+                            transient = isinstance(error, BackupError) and error.status in (429, 502, 503, 504)
+                            if transient:
+                                db.execute("UPDATE run_items SET status='deferred',error=? WHERE run=? AND status='queued'",
+                                           ('این فایل هنوز بررسی نشده؛ در انتظار ادامه پس از رفع خطای سرویس. علت: ' + message, failed['id']))
                             db.execute("UPDATE run_items SET status='error',error=? WHERE run=? AND status IN ('queued','processing')",
                                        (message, failed['id']))
                         self.finish_result(failed)
@@ -1040,6 +1056,7 @@ class BackupManager:
                         message = str(error) if isinstance(error, BackupError) else 'خواندن یا snapshot فایل ناموفق بود: ' + str(path)
                         self.record_item(run, path, 'error', error=message)
                         errors.append(message)
+                        self.update(errors=list(errors))
                         if isinstance(error, BackupError):
                             if error.status in (401, 403, 429, 502):
                                 raise
@@ -1196,18 +1213,23 @@ class BackupManager:
         if os.name != 'nt':
             raise BackupError('در این سیستم مسیر پوشه را دستی وارد کنید.')
         script = Path(__file__).with_name('folder_picker.py')
-        if not script.is_file():
+        frozen = getattr(sys, 'frozen', False)
+        if not frozen and not script.is_file():
             raise BackupError('فایل انتخاب‌گر پوشه در نصب برنامه پیدا نشد.')
         flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         executable = Path(sys.executable)
         if executable.name.lower() == 'pythonw.exe':
             executable = executable.with_name('python.exe')
         try:
-            result = subprocess.run([str(executable), '-I', str(script)],
-                                    capture_output=True, timeout=180, creationflags=flags)
+            with tempfile.TemporaryDirectory(prefix='picker-', dir=self.state_dir) as picker_dir:
+                output = Path(picker_dir) / 'result.json'
+                command = ([str(executable), '--folder-picker', str(output)] if frozen
+                           else [str(executable), '-I', str(script)])
+                result = subprocess.run(command, capture_output=True, timeout=180, creationflags=flags)
+                raw = output.read_bytes() if frozen and not result.returncode else result.stdout
             if result.returncode:
-                raise BackupError('پنجرهٔ انتخاب پوشه باز نشد؛ نصب Python باید مؤلفهٔ Tcl/Tk داشته باشد. مسیر را می‌توانید دستی وارد کنید.')
-            payload = json.loads(result.stdout.decode('utf-8-sig'))
+                raise BackupError('پنجرهٔ انتخاب پوشه باز نشد؛ مسیر را دستی وارد کنید یا نصب برنامه را ترمیم کنید.')
+            payload = json.loads(raw.decode('utf-8-sig'))
             if not isinstance(payload, dict) or not isinstance(payload.get('path'), str) or type(payload.get('cancelled')) is not bool:
                 raise ValueError()
             path = payload['path'].strip()

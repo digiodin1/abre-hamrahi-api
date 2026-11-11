@@ -9,6 +9,7 @@ import sys
 import uuid
 
 from .cli import default_data_dir
+from .runtime import command as runtime_command
 
 
 class GUID(ctypes.Structure):
@@ -72,14 +73,11 @@ def create_shortcuts(directory, port, desktop=None):
             raise OSError('Windows desktop directory is unavailable')
         desktop = Path(buffer.value)
     desktop = Path(desktop)
-    executable = Path(sys.executable)
-    if executable.with_name('pythonw.exe').is_file():
-        executable = executable.with_name('pythonw.exe')
-    runner = Path(__file__).with_name('desktop_runner.py')
-    arguments = subprocess.list2cmdline([str(runner), '--data-dir', str(Path(directory).resolve()),
-                                       '--port', str(port)])
+    parts = runtime_command('desktop', directory, port)
+    executable = Path(parts[0])
+    arguments = subprocess.list2cmdline(parts[1:])
     link = desktop / 'Abre Hamrahi API.lnk'
-    create_link(link, executable, arguments, runner.parent)
+    create_link(link, executable, arguments, executable.parent)
     (desktop / 'Abre Hamrahi Cloud.url').write_text(
         '[InternetShortcut]\nURL=https://abrehamrahi.ir/drive/files\n', encoding='ascii')
     return link
@@ -89,11 +87,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Create current-user Windows desktop shortcuts.')
     parser.add_argument('--data-dir', type=Path, default=default_data_dir())
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--desktop', type=Path, help='Optional existing shortcut destination directory')
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error('--port must be between 1 and 65535')
     try:
-        create_shortcuts(args.data_dir, args.port)
+        create_shortcuts(args.data_dir, args.port, desktop=args.desktop)
     except OSError:
         print('Cannot create desktop shortcuts. Check Windows and desktop permissions.', file=sys.stderr)
         return 1

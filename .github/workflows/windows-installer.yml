@@ -1,0 +1,50 @@
+name: Windows Installer
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.14.6'
+          architecture: x64
+      - name: Install pinned build dependencies
+        run: python -m pip install -r packaging/requirements-windows.txt
+      - name: Verify and prepare official installer compiler
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path .qa -Force | Out-Null
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe' -OutFile .qa/inno-setup.exe
+          $digest = (Get-FileHash .qa/inno-setup.exe -Algorithm SHA256).Hash
+          if ($digest -ne 'A549929319F9120716677C685535CA4671E4B937B5FDC87E2585F32D8EB30E8C') { throw 'Compiler checksum mismatch' }
+          $signature = Get-AuthenticodeSignature .qa/inno-setup.exe
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys') { throw 'Compiler signature mismatch' }
+          $compilerDir = Join-Path $PWD '.qa/inno-compiler'
+          $process = Start-Process .qa/inno-setup.exe -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS','/TASKS=""',('/DIR="'+$compilerDir+'"')) -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw 'Compiler setup failed' }
+      - name: Build and audit standalone app and setup
+        run: python packaging/build_windows.py --iscc .qa/inno-compiler/ISCC.exe
+      - name: Check installer lifecycle without a real cloud account
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist/windows/*-setup.exe).FullName
+          python tests/windows_package_check.py --bundle dist/windows/AbreHamrahiAPI --installer $setup --skip-picker
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-x64
+          path: |
+            dist/windows/*-setup.exe
+            dist/windows/*-portable.zip
+            dist/windows/SHA256SUMS.txt
+            dist/windows/build-info.json
+          if-no-files-found: error
