@@ -1,0 +1,9 @@
+include README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE zeus.project.json
+recursive-include docs *.md
+recursive-include packaging *.py *.spec *.iss *.txt
+recursive-include android *.py *.java *.xml
+recursive-include tests *.py *.mjs
+prune .qa
+prune build
+prune dist
+global-exclude __pycache__ *.py[cod] *.jks *.keystore *.dpapi session.bin config.json history.json

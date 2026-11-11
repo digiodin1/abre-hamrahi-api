@@ -61,6 +61,7 @@ export async function runWebChecks() {
     }
     if(action==='items') return {ok:true,json:async()=>({run:data.run,offset:data.offset,total:125,
       items:[{path,status:'error',bytes:10,error:'synthetic failure'}]})};
+    if(action==='browse') return {ok:true,json:async()=>({path:'C:\\Selected while uploading',cancelled:false})};
     return {ok:true,json:async()=>({started:true,message:'OK'})};
   };
   const context=vm.createContext({document,window:{addEventListener(){},
@@ -104,6 +105,14 @@ export async function runWebChecks() {
   model.state.recovery = {attempt:1, retryAt:1800000000, enabled:true};
   await vm.runInContext('poll()', context);
   assert.equal(elements.get('overall-progress').value,30);
+  assert(!elements.get('browse').disabled,'Folder chooser must stay usable during uploads');
+  assert(!elements.get('folder-path').disabled);
+  assert(elements.get('save').disabled,'Configuration changes must wait for the current run');
+  await elements.get('browse').onclick();
+  assert.equal(elements.get('folder-path').value,'C:\\Selected while uploading');
+  elements.get('add-folder').onclick();
+  assert(elements.get('folder-list').innerHTML.includes('Selected while uploading'));
+  assert(elements.get('save').disabled);
   assert(elements.get('progress-detail').textContent.includes('در انتظار ادامه'));
   assert(elements.get('recovery-state').textContent.includes('تلاش مجدد خودکار'));
   assert(elements.get('errors').children.some(p=>p.textContent.includes('synthetic error')), 'Previous failure must remain visible during recovery');

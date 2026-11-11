@@ -63,6 +63,7 @@ def main(argv=None):
     parser.add_argument('--port', type=int, default=8765, help='Loopback panel port (default: 8765)')
     parser.add_argument('--data-dir', type=Path, default=default_data_dir(), help='Private local settings/session directory')
     parser.add_argument('--no-browser', action='store_true', help='Run the panel and scheduler without opening a browser')
+    parser.add_argument('--tray', action='store_true', help='Show a Windows notification area icon')
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error('--port must be between 1 and 65535')
@@ -74,6 +75,24 @@ def main(argv=None):
             scheduler = threading.Thread(target=manager.scheduler, daemon=True, name='backup-scheduler')
             scheduler.start()
             url = f'http://127.0.0.1:{server.server_port}/'
+            tray = None
+            if args.tray and os.name == 'nt':
+                from .tray import WindowsTray
+                def exit_from_tray():
+                    try:
+                        server.request_exit()
+                    except Exception:
+                        import ctypes
+                        ctypes.windll.user32.MessageBoxW(None,
+                            'ابتدا پنجرهٔ انتخاب پوشه را ببندید، سپس دوباره خروج را بزنید.',
+                            'Abre Hamrahi API', 0x30)
+                        return
+                    server.shutdown()
+                tray = WindowsTray(url, exit_from_tray)
+                try:
+                    tray.start()
+                except OSError:
+                    print('Notification icon unavailable; use the desktop shortcut and Settings > Exit.', file=sys.stderr)
             print(f'Abre Hamrahi API {__version__}: {url}', flush=True)
             print('Keep this process running for scheduled backups. Exit from Settings or press Ctrl+C.', flush=True)
             if os.name != 'nt':
@@ -86,6 +105,8 @@ def main(argv=None):
                 print('Stopping; waiting for the current bounded network request...', flush=True)
             finally:
                 shutdown_failed = False
+                if tray is not None:
+                    tray.close()
                 manager.close()
                 server.server_close()
                 scheduler.join(timeout=2)

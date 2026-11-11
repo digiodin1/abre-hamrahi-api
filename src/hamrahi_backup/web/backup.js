@@ -35,7 +35,7 @@ function message(text, error=false) {
 function changed() {
   dirty = true;
   $('save-bar').hidden = false;
-  $('save-state').textContent = 'تغییرات را ذخیره کنید';
+  $('save-state').textContent = model?.state.busy ? 'پس از پایان کار جاری تنظیمات را ذخیره کنید.' : 'تغییرات را ذخیره کنید';
   renderControls();
 }
 async function api(action, data={}) {
@@ -61,9 +61,10 @@ async function perform(button, work) {
 function renderControls() {
   const busy = !!model?.state.busy, pending = activeRequests > 0 || closing, auth = !!model?.authenticated;
   $('shutdown').disabled = !initialized || pending;
-  for (const id of ['preview','save','add-folder','browse','resume-sync','login','send-code','captcha-get']) $(id).disabled = !initialized || busy || pending;
+  for (const id of ['preview','save','resume-sync','login','send-code','captcha-get']) $(id).disabled = !initialized || busy || pending;
+  for (const id of ['browse','add-folder','folder-path']) $(id).disabled = !initialized || pending;
   for (const id of ['sync','test','check-connection','logout']) $(id).disabled = busy || pending || !auth;
-  for (const id of ['remote-root','interval','max-size','settle','automatic','verify','excludes','folder-path']) $(id).disabled = !initialized || busy || pending;
+  for (const id of ['remote-root','interval','max-size','settle','automatic','verify','excludes']) $(id).disabled = !initialized || busy || pending;
   $('sync-on-change').disabled = busy || pending || !$('automatic').checked;
   $('startup').disabled = busy || pending || !model?.startup?.supported;
   $('pause-sync').hidden = !model?.config.automatic || !!model?.config.automaticPaused;
@@ -273,4 +274,4 @@ document.addEventListener('click',event=>{
 $('report-failed').onchange=()=>{views.report.offset=0;loadItems('report').catch(error=>message(error.message,true));};
 window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});
 showPage(location.hash.slice(1)); renderControls();
-poll(); setInterval(()=>{if(!activeRequests)poll();},1500);
+poll(); setInterval(poll,1500);

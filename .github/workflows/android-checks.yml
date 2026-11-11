@@ -1,0 +1,24 @@
+name: Android Adapter
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Verify test-only JSON runtime
+        run: |
+          mkdir -p .qa
+          curl --fail --location https://repo.maven.apache.org/maven2/org/json/json/20250517/json-20250517.jar -o .qa/json.jar
+          echo '3ea61b2a06e31edf1c91134fe9106b0ebb16628be169f3db75bc7a2b06b45796  .qa/json.jar' | sha256sum --check
+      - name: Native policy and cloud adapter contracts
+        run: python android/check.py --jdk "$JAVA_HOME" --json-jar .qa/json.jar

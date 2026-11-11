@@ -31,6 +31,7 @@ import uuid
 from .watcher import ChangeMonitor, relevant_path
 from .startup import StartupRegistration, StartupPathError
 from .layout import CloudLayout, METADATA
+from . import __version__
 
 API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = ['.git', 'node_modules', '.venv', 'venv', '__pycache__',
@@ -632,7 +633,7 @@ class BackupManager:
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
                                           'startup': self.startup.status(),
-                                          'provider': {'experimental': False, 'release': '1.4.0', 'checkedOn': '2026-11-07',
+                                          'provider': {'experimental': False, 'release': __version__, 'checkedOn': '2026-11-07',
                                                        'mode': 'one-way-versioned'}}))
 
     def update(self, **values):

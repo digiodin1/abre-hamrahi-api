@@ -8,6 +8,7 @@ import secrets
 import threading
 
 from .engine import BackupError
+from . import __version__
 
 MAX_BODY = 64 * 1024
 ASSETS = {
@@ -28,7 +29,8 @@ class PanelServer(ThreadingHTTPServer):
         self.csrf = secrets.token_urlsafe(32)
         self.exit_requested = threading.Event()
         self.slots = threading.BoundedSemaphore(16)
-        self.assets = {path: (files('hamrahi_backup').joinpath('web', name).read_bytes(), mime)
+        self.assets = {path: (files('hamrahi_backup').joinpath('web', name).read_bytes().replace(
+            b'{{APP_VERSION}}', __version__.encode('ascii')), mime)
                        for path, (name, mime) in ASSETS.items()}
         super().__init__(('127.0.0.1', port), Handler)
         self.hosts = {f'127.0.0.1:{self.server_port}', f'localhost:{self.server_port}'}

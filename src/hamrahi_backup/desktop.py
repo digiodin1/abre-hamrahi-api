@@ -11,6 +11,7 @@ import webbrowser
 
 from .cli import default_data_dir, instance_lock
 from .runtime import command as runtime_command
+from .profile import load_profile
 
 
 def ready(port):
@@ -60,9 +61,10 @@ def open_panel(directory, port, open_browser=webbrowser.open, timeout=12):
 
 
 def main(argv=None):
+    directory, port = load_profile(default_data_dir())
     parser = argparse.ArgumentParser(description='Start or open the local backup panel.')
-    parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--data-dir', type=Path, default=default_data_dir())
+    parser.add_argument('--port', type=int, default=port)
+    parser.add_argument('--data-dir', type=Path, default=directory)
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error('--port must be between 1 and 65535')

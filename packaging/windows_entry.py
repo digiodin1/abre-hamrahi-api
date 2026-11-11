@@ -46,7 +46,21 @@ def main():
             'nativeObserver': Observer.__name__}), encoding='utf-8')
         return 0
     if args == ['--remove-startup']:
+        from hamrahi_backup.profile import load_profile
+        directory, port = load_profile(default_data_dir())
+        StartupRegistration(directory, port).configure(False)
         StartupRegistration(default_data_dir(), 8765).configure(False)
+        return 0
+    if args[:1] == ['--remember-profile']:
+        from hamrahi_backup.profile import remember_profile
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--port', type=int, required=True)
+        parser.add_argument('--data-dir', type=Path, required=True)
+        parser.add_argument('--startup', action='store_true')
+        parsed = parser.parse_args(args[1:])
+        remember_profile(default_data_dir(), parsed.data_dir, parsed.port)
+        if parsed.startup:
+            StartupRegistration(parsed.data_dir, parsed.port).configure(True)
         return 0
     if args[:1] == ['--create-shortcuts']:
         from hamrahi_backup.shortcuts import main as shortcuts
@@ -60,7 +74,7 @@ def main():
         if not handle:
             return 1
         try:
-            return serve(args[1:])
+            return serve(args[1:] + ['--tray'])
         finally:
             kernel.CloseHandle(handle)
     if args[:1] == ['--headless-open']:

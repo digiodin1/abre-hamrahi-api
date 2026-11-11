@@ -22,6 +22,8 @@ last-test.json
 *.key
 *.pfx
 *.p12
+*.jks
+*.keystore
 *.tmp
 *.zip
 *.whl

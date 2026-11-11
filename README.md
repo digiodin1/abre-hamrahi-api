@@ -2,7 +2,9 @@
 
 Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, preserves their original file names, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
-Version **1.4.0** adds a self-contained Windows installer and portable bundle, plus clear per-file failure reasons, automatic recovery status and file-count progress with readable size units. It includes a start-or-open desktop launcher, affected-file sync and resilient scheduling, while preserving original file names and separate verified history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
+Version **1.5.0** keeps folder selection available during uploads and adds a Windows notification area icon to the standalone application. Closing the browser leaves backup running; open it again from the icon or desktop shortcut. Settings changes take effect after the active run completes and you save them. The application release status does not imply official provider support.
+
+A native [Android APK](docs/android.md) is also available for selecting and backing up phone folders directly to the cloud. Its initial build has adapter and signature checks but still requires physical-device validation. Android background work follows the operating system's scheduling limits.
 
 The project is intentionally conservative:
 

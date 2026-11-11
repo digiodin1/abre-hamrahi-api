@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.0 - 2026-11-11
+
+- Keep folder selection and preparation available during uploads; preserve save guards around active jobs and continue progress polling while the chooser is open.
+- Add a Windows notification area icon with open/exit controls, graceful cleanup and Explorer-restart recovery.
+- Remember an explicitly migrated desktop profile so installed launches, shortcuts and optional startup use its original account, state and port.
+- Derive the reported release from the package version rather than a separate hardcoded value.
+- Add a signed native Android APK with Storage Access Framework folder selection, Keystore-protected sessions, version preservation, SHA-256 verification, recovery journals, foreground monitoring and scheduled background jobs.
+- Document Android storage/battery limits and physical-device validation still required for the first Android build.
+
+## 1.4.0 - 2026-11-11
+
+- Package the Windows runtime, native file watcher and folder chooser in a per-user installer and portable bundle.
+- Validate real install, repeat launch, repair and uninstall in isolated profiles without Python on PATH.
+- Audit runtime bundles for private state, credentials and absolute developer paths.
+
+## 1.3.1 - 2026-11-11
+
+- Show per-file failures, readable byte units, progress and automatic-retry status.
+- Preserve failed and deferred rows across retry and recover interrupted work.
+
 ## 1.3.0 - 2026-11-11
 
 - Add a start-or-open desktop launcher, duplicate-click serialization and Windows Shell shortcut creation.
