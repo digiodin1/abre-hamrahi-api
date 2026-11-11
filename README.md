@@ -2,7 +2,7 @@
 
 Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, preserves their original file names, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
 
-Version **1.2.0** adds confirmed graceful exit in Settings and the local API, while preserving original file names and separate verified history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
+Version **1.3.0** adds a start-or-open desktop launcher, affected-file sync and resilient scheduling, while preserving original file names and separate verified history. Account, folders, settings, processing, and reports have separate pages. The application release status does not imply official provider support.
 
 The project is intentionally conservative:
 
@@ -45,6 +45,10 @@ Only the loopback address is accepted. Do not expose the port through a firewall
 The provider cannot call this local API back into your computer. A process already running as your Windows user remains outside this tool’s protection boundary.
 
 ## First run
+
+For desktop shortcuts and safe setup of a project parent directory, see
+[Desktop launcher and project folders](docs/desktop-and-projects.md). The command
+`abre-hamrahi-open` opens an existing instance or starts it before opening the UI.
 
 1. Open the panel and sign in with the account owner’s phone and either the one-time code or account password. Complete any provider registration or terms step on the official site first.
 2. Add one or more local folders. Do not select the state directory, a drive root, a symlink, a mounted credential store, or a folder containing secrets you do not want to back up.

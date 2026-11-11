@@ -36,6 +36,9 @@ API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = ['.git', 'node_modules', '.venv', 'venv', '__pycache__',
                     '*.tmp', '*.part', '*.lock', '*-wal', '*-shm', '.env', '.env.*',
                     '*.pem', '*.key', 'credentials', '.backup', '.abr-hamrahi-api']
+DEFAULT_EXCLUDES += ['.qa', '.private', '.runtime', '.wwebjs_auth', '.wwebjs_cache',
+                     '*.dpapi', '*.pfx', '*.p12', '.ssh', '.aws', '.azure', '.kube',
+                     '.npmrc', '.pypirc', '.netrc', 'id_rsa*', 'id_ed25519*']
 
 
 class BackupError(Exception):
@@ -460,6 +463,8 @@ class BackupManager:
         self.change_due = None
         self.change_generation = 0
         self.synced_generation = 0
+        self.pending_paths = {}
+        self.full_sync_generation = 0
         self.retry_at = 0
         self.retry_attempt = 0
         self.change_monitor = ChangeMonitor(self._on_source_change)
@@ -613,7 +618,7 @@ class BackupManager:
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
                                           'startup': self.startup.status(),
-                                          'provider': {'experimental': False, 'release': '1.2.0', 'checkedOn': '2026-11-07',
+                                          'provider': {'experimental': False, 'release': '1.3.0', 'checkedOn': '2026-11-07',
                                                        'mode': 'one-way-versioned'}}))
 
     def update(self, **values):
@@ -710,7 +715,9 @@ class BackupManager:
                 return
             if relevant_path(path, self.config, self.state_dir) is None:
                 return
-            self._queue_sync()
+            # Missing files/directories require reconciliation; existing file
+            # edits can use a partial manifest without rereading every source.
+            self._queue_sync(path if Path(path).is_file() else None)
             self.state['lastChange'] = now()
 
     def configure_change_monitor(self):
@@ -722,8 +729,13 @@ class BackupManager:
                 self._queue_sync()
             self.state.update(watching=status['watching'], watchBackend=status['backend'], watchError=status['error'])
 
-    def _queue_sync(self):
+    def _queue_sync(self, path=None):
         self.change_generation += 1
+        if path is None or len(self.pending_paths) >= 1000:
+            self.full_sync_generation = self.change_generation
+            self.pending_paths.clear()
+        else:
+            self.pending_paths[str(Path(path).resolve())] = self.change_generation
         self.change_due = time.time() + max(self.config['debounceSeconds'], self.config['settleSeconds'])
 
     def _refresh_automation(self):
@@ -746,6 +758,8 @@ class BackupManager:
                 self.work_lock.release()
                 raise BackupError('اجرای خودکار اکنون آماده نیست.', 409)
             generation = self.change_generation
+            if trigger == 'change' and only_paths is None and self.full_sync_generation <= self.synced_generation:
+                only_paths = set(self.pending_paths) or None
             self.stop.clear()
             self.state.update(busy=True, action=action, trigger=trigger, phase='شروع بررسی', current='',
                               uploaded=0, skipped=0, bytes=0, errors=[], runId=None, steps=[], fileStage=None)
@@ -788,8 +802,10 @@ class BackupManager:
                     if action == 'sync':
                         if trigger != 'change' or self.state['nextRun'] is None:
                             self.state['nextRun'] = time.time() + self.config['intervalMinutes'] * 60 if self.config['automatic'] else None
-                        if succeeded and not only_paths:
+                        if succeeded and (not only_paths or trigger == 'change'):
                             self.synced_generation = max(self.synced_generation, generation)
+                            self.pending_paths = {path: value for path, value in self.pending_paths.items()
+                                                  if value > generation}
                             self.retry_at = 0
                             self.retry_attempt = 0
                             if self.change_generation <= self.synced_generation:
@@ -832,7 +848,8 @@ class BackupManager:
                     if is_link(path) or excluded(path):
                         skips.append(str(path))
                     elif path.is_dir():
-                        yield from visit(path)
+                        if only_paths is None or any(within(Path(p), path) for p in only_paths):
+                            yield from visit(path)
                     elif path.is_file():
                         if only_paths is not None and str(path.resolve()) not in only_paths:
                             continue
@@ -906,7 +923,8 @@ class BackupManager:
         run = uuid.uuid4().hex
         result = {'id': run, 'at': now(), 'preview': preview, 'uploaded': 0, 'unchanged': 0, 'bytes': 0,
                   'files': 0, 'errors': [], 'excluded': 0, 'samples': [], 'manifests': [],
-                  'retry': bool(only_paths)}
+                  'retry': bool(only_paths) and self.state.get('trigger') != 'change',
+                  'partial': bool(only_paths)}
         self.active_result = result
         atomic_json(self.state_dir / 'active-run.json', result)
         self.update(runId=run, fileStage=None, steps=[
@@ -1077,8 +1095,14 @@ class BackupManager:
     def scheduler(self):
         try:
             while not self.shutdown.is_set():
-                self.configure_change_monitor()
-                self.scheduler_tick()
+                try:
+                    self.configure_change_monitor()
+                    self.scheduler_tick()
+                except Exception:
+                    # A transient watcher/OS failure must not silently kill
+                    # automation. Keep private exception text out of the UI.
+                    self.update(watchError='پایش خودکار موقتاً ناموفق بود؛ تلاش دوباره انجام می‌شود.')
+                    self.shutdown.wait(5)
                 self.shutdown.wait(1)
         finally:
             self.change_monitor.close()

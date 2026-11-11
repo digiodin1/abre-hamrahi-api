@@ -2,11 +2,13 @@
   "name": "abre-hamrahi-api",
   "owner": "internal",
   "kind": "local-backup-panel",
-  "description": "Loopback-only backup panel with exact file names, verified history, legacy migration and protected graceful exit",
+  "description": "Loopback backup panel with verified history, incremental file-change runs, resilient scheduling and a start-or-open desktop launcher",
   "entrypoints": [
     "src/hamrahi_backup/cli.py",
     "src/hamrahi_backup/server.py",
-    "src/hamrahi_backup/startup_runner.py"
+    "src/hamrahi_backup/startup_runner.py",
+    "src/hamrahi_backup/desktop_runner.py",
+    "src/hamrahi_backup/shortcuts.py"
   ],
   "apis": [
     {

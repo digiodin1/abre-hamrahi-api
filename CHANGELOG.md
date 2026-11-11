@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 - 2026-11-11
+
+- Add a start-or-open desktop launcher, duplicate-click serialization and Windows Shell shortcut creation.
+- Process affected file paths in change-triggered runs after a successful baseline; preserve edits arriving during transfers.
+- Keep full reconciliation for structural changes, restart, configuration, queue overflow and periodic integrity checks.
+- Retry transient monitor failures without silently losing the scheduler.
+- Add private session/key/test directories to new-install exclusions; preserve existing configured exclusions.
+- Document broad project sources, explicit exclusions and partial recovery manifests.
+
 ## 1.2.0 - 2026-11-08
 
 - Add a confirmed Exit application button in Settings and a protected local `shutdown` API action.

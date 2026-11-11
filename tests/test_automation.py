@@ -177,6 +177,110 @@ class AutomationTests(unittest.TestCase):
         target = self.source / 'database.sqlite'
         self.assertEqual(relevant_path(str(target) + '-wal', self.engine.config, self.engine.state_dir), target.resolve())
 
+    def test_changed_file_only_run_does_not_snapshot_unrelated_files(self):
+        target, other = self.source / 'a.txt', self.source / 'b.txt'
+        target.write_text('before')
+        other.write_text('unrelated')
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        target.write_text('after')
+        self.engine._on_source_change(target)
+        with patch.object(self.engine, 'snapshot', wraps=self.engine.snapshot) as snapshot:
+            self.make_due()
+            self.engine.scheduler_tick()
+            self.await_worker()
+        self.assertEqual([call.args[0].resolve() for call in snapshot.call_args_list], [target.resolve()])
+        self.assertEqual(self.engine.state['lastResult']['files'], 1)
+        self.assertTrue(self.engine.state['lastResult']['partial'])
+        self.assertFalse(self.engine.state['lastResult']['retry'])
+        self.assertFalse(self.engine.public()['state']['pendingSync'])
+
+    def test_change_during_partial_run_is_not_cleared(self):
+        target = self.source / 'a.txt'
+        target.write_text('before')
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        target.write_text('after')
+        self.engine._on_source_change(target)
+        upload = self.fake.upload
+        def edit(*args, **kwargs):
+            result = upload(*args, **kwargs)
+            if args[1] == 'a.txt':
+                target.write_text('newest')
+                self.engine._on_source_change(target)
+            return result
+        with patch.object(self.fake, 'upload', side_effect=edit):
+            self.make_due()
+            self.engine.scheduler_tick()
+            self.await_worker()
+        self.assertTrue(self.engine.public()['state']['pendingSync'])
+        self.assertIn(str(target.resolve()), self.engine.pending_paths)
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        self.assertFalse(self.engine.public()['state']['pendingSync'])
+        self.assertTrue(any(item.get('data') == b'newest' for item in self.fake.objects.values()))
+
+    def test_directory_delete_requests_full_reconciliation(self):
+        target = self.source / 'gone.txt'
+        target.write_text('before')
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        target.unlink()
+        self.engine._on_source_change(target)
+        self.assertGreater(self.engine.full_sync_generation, self.engine.synced_generation)
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        self.assertFalse(self.engine.state['lastResult']['retry'])
+        self.assertTrue(any(item.get('data') == b'before' for item in self.fake.objects.values()))
+
+    def test_path_queue_overflow_falls_back_to_full_scan(self):
+        self.engine.pending_paths = {str(self.source / f'{i}.txt'): 1 for i in range(1000)}
+        with self.engine.lock:
+            self.engine._queue_sync(self.source / 'overflow.txt')
+        self.assertEqual(self.engine.pending_paths, {})
+        self.assertGreater(self.engine.full_sync_generation, self.engine.synced_generation)
+
+    def test_new_private_exclusions_apply_to_scan_and_notifications(self):
+        for folder in ['.qa', '.private', '.runtime', '.wwebjs_auth']:
+            directory = self.source / folder
+            directory.mkdir()
+            (directory / 'synthetic.txt').write_text('private')
+        secret = self.source / 'token.dpapi'
+        secret.write_text('private')
+        public = self.source / 'public.txt'
+        public.write_text('public')
+        errors, skips = [], []
+        eligible = list(self.engine.walk(self.source.resolve(), self.engine.config, errors, skips))
+        self.assertEqual(eligible, [public.resolve()])
+        self.assertIsNone(relevant_path(secret, self.engine.config, self.engine.state_dir))
+
+    def test_scheduler_survives_transient_monitor_exception(self):
+        recovered = threading.Event()
+        original = self.engine.configure_change_monitor
+        calls = 0
+        def configure():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError('synthetic private detail must not appear')
+            original()
+            recovered.set()
+        with patch.object(self.engine, 'configure_change_monitor', side_effect=configure):
+            worker = threading.Thread(target=self.engine.scheduler, daemon=True)
+            worker.start()
+            try:
+                self.assertTrue(recovered.wait(9))
+                self.assertTrue(worker.is_alive())
+                self.assertNotIn('synthetic', str(self.engine.public()['state']['watchError']))
+            finally:
+                self.engine.close()
+                worker.join(5)
+
     def test_scheduler_and_monitor_detect_edit_and_upload_without_api_call(self):
         target = self.source / 'hello.txt'
         target.write_text('first')
