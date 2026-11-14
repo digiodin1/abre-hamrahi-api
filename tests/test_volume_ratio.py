@@ -29,6 +29,15 @@ class VolumeRatioTests(unittest.TestCase):
         self.assertEqual(match_summary(manager, {'a': {'localBytes': 0, 'cloudBytes': 0,
             'checkedAt': '2026-11-12'}})['percent'], 100)
 
+    def test_changed_scope_or_unreadable_source_never_claims_known_percentage(self):
+        manager = SimpleNamespace(config={'folders': [{'id': 'a', 'enabled': True}]})
+        for flag in ('scopeChanged', 'sizeUnreadable'):
+            result = match_summary(manager, {'a': {'localBytes': 100, 'cloudBytes': 100,
+                'checkedAt': '2026-11-14', flag: True}})
+            self.assertIsNone(result['percent'])
+            self.assertFalse(result['known'])
+            self.assertFalse(result['complete'])
+
     def test_percentage_uses_whole_physical_folder_not_small_eligible_subset(self):
         manager = SimpleNamespace(config={'folders': [{'id': 'a', 'enabled': True}]})
         result = match_summary(manager, {'a': {'localTotalBytes': 7057009493,

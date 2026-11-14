@@ -110,6 +110,28 @@ public final class CloudChecks {
         rejected(() -> renamed.cloud().folder("اصل", null));
     }
 
+    private static void currentVersions() throws Exception {
+        String route = "v2/flat/list-objects/?is_trash=false&recursive=false&limit=1000&offset=0&parent=7";
+        JSONObject current = new JSONObject().put("id", 12).put("name", "same.txt").put("parent", 7)
+            .put("key", "current-key").put("size", 20).put("is_current_version", true);
+        JSONObject history = new JSONObject(current.toString()).put("id", 11).put("size", 10)
+            .put("is_current_version", false);
+        Fixture fixture = new Fixture();
+        fixture.add(route, 200, listing(new JSONArray().put(history).put(current).toString()));
+        Cloud cloud = fixture.cloud();
+        expect(cloud.named(7L, "same.txt").getLong("id") == 12, "Native history confused with current duplicate");
+        Fixture paged = new Fixture();
+        paged.add(route, 200, new JSONObject().put("results", new JSONArray().put(history)).put("next", "next").toString());
+        paged.add(route.replace("offset=0", "offset=1000"), 200, listing(new JSONArray().put(current).toString()));
+        expect(paged.cloud().list(7L).size() == 1, "History-only page ended pagination");
+        for (Object flag : new Object[]{JSONObject.NULL, 1, "false"}) {
+            Fixture invalid = new Fixture();
+            invalid.add(route, 200, listing(new JSONArray().put(new JSONObject(current.toString())
+                .put("is_current_version", flag)).toString()));
+            rejected(() -> invalid.cloud().list(7L));
+        }
+    }
+
     private static void transfers() throws Exception {
         File file = File.createTempFile("abre-synthetic-", ".txt");
         byte[] contents = "synthetic bytes".getBytes("UTF-8");
@@ -221,7 +243,7 @@ public final class CloudChecks {
     }
 
     public static void main(String[] args) throws Exception {
-        namesAndDestinations(); folders(); transfers(); refreshAndAmbiguousMove(); schedulesAndTrash();
+        namesAndDestinations(); folders(); currentVersions(); transfers(); refreshAndAmbiguousMove(); schedulesAndTrash();
         System.out.println("Android policy and cloud adapter checks passed: " + assertions + " assertions; no real account or network.");
     }
 }

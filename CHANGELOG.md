@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.2 - 2026-11-14
+
+- Exclude explicitly historical native versions from current folder listings on Windows and Android, preserving provider history and guards against genuine duplicate current names.
+- Persist fresh whole-folder volume measurements during uploads and on cancellation; recover the newest observation after restart or a failed final inventory.
+- Withhold the volume percentage when folder scope has changed or local size cannot be measured reliably.
+- Add regression coverage for version filtering, history-only pagination, malformed version flags and restart recovery.
+
 ## 1.7.1 - 2026-11-14
 
 - Align account quota precision with the provider's two-decimal display; clearly distinguish remaining space from used space and percentage.

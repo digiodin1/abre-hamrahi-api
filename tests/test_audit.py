@@ -28,6 +28,46 @@ class AuditTests(unittest.TestCase):
     def summary(self):
         return self.manager.public()['folderStats'][self.job['id']]
 
+    def test_latest_volume_survives_restart_when_final_inventory_fails(self):
+        (self.source / 'old.txt').write_bytes(b'old')
+        self.manager.sync()
+        (self.source / 'new.txt').write_bytes(b'new contents')
+        with patch.object(audit, 'capture_synced_folder', side_effect=engine.BackupError('synthetic outage')):
+            with self.assertRaises(engine.BackupError):
+                self.manager.sync()
+        expected = self.summary()
+        self.assertEqual(expected['cloudBytes'], 15)
+        self.manager = engine.BackupManager(self.base, self.cloud)
+        restored = self.summary()
+        self.assertEqual(restored['cloudBytes'], 15)
+        self.assertEqual(restored['localTotalBytes'], 15)
+        self.assertEqual(restored['measuredAt'], expected['measuredAt'])
+        self.assertEqual(self.manager.public()['syncMatch']['percent'], 100)
+        self.manager.sync()
+        self.assertGreater(self.summary()['measuredAt'], restored['measuredAt'])
+        self.assertNotIn('inProgress', self.summary())
+
+    def test_new_audit_replaces_live_observation_left_by_failed_sync(self):
+        (self.source / 'old.txt').write_bytes(b'old')
+        with patch.object(audit, 'capture_synced_folder', side_effect=engine.BackupError('synthetic outage')):
+            with self.assertRaises(engine.BackupError):
+                self.manager.sync()
+        self.assertTrue(self.summary()['inProgress'])
+        (self.source / 'missing.txt').write_bytes(b'missing')
+        audit.audit_folders(self.manager)
+        self.assertEqual(self.summary()['localTotalBytes'], 10)
+        self.assertEqual(self.summary()['cloudBytes'], 3)
+        self.assertNotIn('inProgress', self.summary())
+
+    def test_changed_remote_root_invalidates_volume_but_schedule_does_not(self):
+        (self.source / 'hello.txt').write_bytes(b'hello')
+        self.manager.sync()
+        changed = self.manager.config | {'folders': [self.job | {'syncMode': 'daily'}]}
+        self.manager.save_config(changed)
+        self.assertEqual(self.manager.public()['syncMatch']['percent'], 100)
+        self.manager.save_config(self.manager.config | {'remoteRoot': 'Other destination'})
+        self.assertIsNone(self.manager.public()['syncMatch']['percent'])
+
     def test_read_only_missing_files_and_actual_sizes(self):
         (self.source / 'missing.txt').write_bytes(b'hello')
         (self.source / '.env').write_bytes(b'private')

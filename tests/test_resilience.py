@@ -104,6 +104,29 @@ class ProtocolTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_native_history_is_not_a_duplicate_current_file(self):
+        current = {'id': 2, 'name': 'same.txt', 'is_current_version': True}
+        historical = {'id': 1, 'name': 'same.txt', 'is_current_version': False}
+        legacy = {'id': 3, 'name': 'legacy.txt'}
+        with patch.object(self.client, '_json', return_value={
+                'results': [historical, current, legacy], 'next': None}):
+            self.assertEqual(self.client.list_folder(7), [current, legacy])
+
+    def test_history_only_page_does_not_end_pagination(self):
+        current = {'id': 2, 'name': 'same.txt', 'is_current_version': True}
+        with patch.object(self.client, '_json', side_effect=[
+                {'results': [{'id': 1, 'name': 'same.txt', 'is_current_version': False}], 'next': 'next'},
+                {'results': [current], 'next': None}]) as listing:
+            self.assertEqual(self.client.list_folder(7), [current])
+        self.assertIn('offset=1000', listing.call_args.args[1])
+
+    def test_invalid_current_version_flag_is_not_guessed(self):
+        for flag in (None, 1, 'false'):
+            with self.subTest(flag=flag), patch.object(self.client, '_json', return_value={
+                    'results': [{'id': 1, 'name': 'same.txt', 'is_current_version': flag}], 'next': None}):
+                with self.assertRaises(cb.BackupError):
+                    self.client.list_folder(7)
+
     def test_unexpected_api_shapes_fail_closed(self):
         for raw in [b'[]', b'null', b'"string"']:
             self.client.opener.open = lambda *a, **k: Response(raw)

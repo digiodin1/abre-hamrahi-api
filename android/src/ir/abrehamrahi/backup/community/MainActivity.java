@@ -175,7 +175,7 @@ public final class MainActivity extends Activity {
         screen.setOrientation(LinearLayout.VERTICAL);
         screen.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         TextView title = new TextView(this);
-        title.setText("Abre Hamrahi API · 1.7.1");
+        title.setText("Abre Hamrahi API · 1.7.2");
         title.setTypeface(bold);
         title.setTextSize(22); title.setPadding(16, 32, 16, 16);
         screen.addView(title);

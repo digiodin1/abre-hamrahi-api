@@ -2,7 +2,7 @@
   "name": "abre-hamrahi-api",
   "owner": "internal",
   "kind": "local-backup-panel",
-  "description": "Windows folder sync with independent instant or daily folder schedules, bundled IRANSansX UI, native replacement and guarded provider trash, bounded parallel transfers, pooled HTTPS, live account used/remaining quota with provider precision, cloud/local volume totals, resumable file queue, tray controls and quiet startup",
+  "description": "Windows and Android folder sync with instant or daily schedules, bundled IRANSansX, native replacement and guarded trash, current-version folder inventories, durable cloud/local volume observations, bounded parallel transfers, live account quota, resumable queue, tray controls and quiet startup",
   "entrypoints": [
     "src/hamrahi_backup/cli.py",
     "src/hamrahi_backup/server.py",

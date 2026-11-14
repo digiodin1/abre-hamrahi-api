@@ -57,23 +57,41 @@ def config_stamp(config):
         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def volume_stamp(config):
+    scope = {'remoteRoot': config['remoteRoot'], 'folders': [
+        {key: job[key] for key in ('id', 'path', 'name')} for job in config['folders']]}
+    return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def folder_summaries(manager):
     with manager.db() as database:
         saved = {job: json.loads(payload) for job, payload in
                  database.execute('SELECT job,payload FROM folder_audits')}
-    saved.update(getattr(manager, 'live_folder_stats', {}))
+        for job, payload in database.execute('SELECT job,payload FROM folder_volumes'):
+            volume = json.loads(payload)
+            if job not in saved or (volume.get('measuredAt', 0), volume['checkedAt']) > (
+                    saved[job].get('measuredAt', 0), saved[job]['checkedAt']):
+                saved[job] = volume
+    for job, volume in getattr(manager, 'live_folder_stats', {}).items():
+        if job not in saved or (volume.get('measuredAt', 0), volume['checkedAt']) > (
+                saved[job].get('measuredAt', 0), saved[job]['checkedAt']):
+            saved[job] = volume
     stamp = config_stamp(manager.config)
+    volume_scope = volume_stamp(manager.config)
     fresh = (getattr(manager, 'audit_generation', None) == manager.change_generation
              and not manager.state['busy'] and not manager.state.get('pendingSync'))
     return {job['id']: saved[job['id']] | {'stale': not fresh or
-            saved[job['id']].get('configStamp') != stamp} for job in manager.config['folders']
+            saved[job['id']].get('configStamp') != stamp,
+            'scopeChanged': (saved[job['id']]['volumeStamp'] != volume_scope
+                if 'volumeStamp' in saved[job['id']] else saved[job['id']].get('configStamp') != stamp)} for job in manager.config['folders']
             if job['id'] in saved}
 
 
 def match_summary(manager, summaries):
     jobs = [job for job in manager.config['folders'] if job['enabled']]
     observations = [summaries.get(job['id']) for job in jobs]
-    known = bool(jobs) and all(item is not None for item in observations)
+    known = bool(jobs) and all(item is not None and not item.get('scopeChanged')
+                              and not item.get('sizeUnreadable') for item in observations)
     total_bytes = sum(item.get('localTotalBytes', item.get('localBytes', 0)) for item in observations if item)
     eligible_bytes = sum(item.get('localBytes', 0) for item in observations if item)
     cloud_bytes = sum(item.get('cloudBytes', 0) for item in observations if item)
@@ -279,10 +297,11 @@ def capture_synced_folder(manager, config, job, paths, result, verified):
         rows.append((job['id'], relative, length, item['size'] if item else None,
                      item['id'] if item else None, 'unchanged' if matched else 'error', message))
     usage = local_usage(manager, root)
-    summary = {'run': result['id'], 'checkedAt': now(), 'startedAt': result['at'],
+    summary = {'run': result['id'], 'checkedAt': now(), 'measuredAt': time.time_ns(), 'startedAt': result['at'],
                'contentVerifiedAt': min(proof_times) if proof_times else None,
                'assurance': 'sha256' if verified else 'size-and-identity',
-               'configStamp': config_stamp(config), 'localBytes': sum(row[2] for row in rows),
+               'configStamp': config_stamp(config), 'volumeStamp': volume_stamp(config),
+               'localBytes': sum(row[2] for row in rows),
                'cloudBytes': sum(item['size'] for item in remote.values()),
                'localFiles': len(rows), 'cloudFiles': len(remote), 'verifiedFiles': confirmed,
                'verifiedBytes': confirmed_bytes, 'issues': len(rows) - confirmed + len(cloud_errors),
@@ -380,8 +399,8 @@ def audit_folders(manager, reuse=True):
                         if next_task is not None:
                             tasks.add(next_task)
             store_checked(manager, result['id'], root, pending_records)
-            summary = {'run': result['id'], 'checkedAt': now(), 'startedAt': result['at'],
-                       'configStamp': config_stamp(config), 'localBytes': local_bytes,
+            summary = {'run': result['id'], 'checkedAt': now(), 'measuredAt': time.time_ns(), 'startedAt': result['at'],
+                       'configStamp': config_stamp(config), 'volumeStamp': volume_stamp(config), 'localBytes': local_bytes,
                        'cloudBytes': sum(item['size'] for item in remote.values()),
                        'localFiles': len(paths) + len(blocked), 'cloudFiles': len(remote),
                        'verifiedFiles': verified, 'verifiedBytes': verified_bytes,

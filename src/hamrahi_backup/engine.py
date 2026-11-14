@@ -319,7 +319,12 @@ class HamrahiClient:
             batch = result['results']
             if any(not isinstance(x, dict) or not isinstance(x.get('name'), str) or type(x.get('id')) is not int for x in batch):
                 raise BackupError('ساختار اعضای پوشهٔ ابری معتبر نیست.', 503)
-            items.extend(batch)
+            for item in batch:
+                current = item.get('is_current_version', True)
+                if type(current) is not bool:
+                    raise BackupError('وضعیت نسخهٔ فعلی فایل ابری معتبر نیست.', 503)
+                if current:
+                    items.append(item)
             if not result.get('next'):
                 return items
             if not batch or offset >= 1000000:
@@ -556,6 +561,7 @@ class BackupManager:
         self.synced_generation = 0
         self.pending_paths = {}
         self.live_folder_stats = {}
+        self.volume_saved = {}
         self.full_sync_generation = 0
         self.retry_at = 0
         self.retry_attempt = 0
@@ -583,6 +589,7 @@ class BackupManager:
             db.execute('CREATE TABLE IF NOT EXISTS files (job TEXT, rel TEXT, sha TEXT, size INTEGER, mtime INTEGER, remote_id INTEGER, remote_name TEXT, PRIMARY KEY(job,rel))')
             db.execute('CREATE TABLE IF NOT EXISTS run_items (run TEXT, path TEXT, status TEXT, size INTEGER, error TEXT, remote_id INTEGER, PRIMARY KEY(run,path))')
             db.execute('CREATE TABLE IF NOT EXISTS folder_audits (job TEXT PRIMARY KEY, payload TEXT)')
+            db.execute('CREATE TABLE IF NOT EXISTS folder_volumes (job TEXT PRIMARY KEY, payload TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS audit_files (job TEXT, rel TEXT, local_size INTEGER, cloud_size INTEGER, remote_id INTEGER, status TEXT, error TEXT, PRIMARY KEY(job,rel))')
             db.execute('CREATE TABLE IF NOT EXISTS verified_objects (remote_id INTEGER PRIMARY KEY, sha TEXT, size INTEGER, revision TEXT, verified_at REAL)')
             db.execute('CREATE TABLE IF NOT EXISTS source_fingerprints (job TEXT, rel TEXT, size INTEGER, mtime INTEGER, ctime INTEGER, inode TEXT, sqlite_file INTEGER, PRIMARY KEY(job,rel))')
@@ -796,6 +803,16 @@ class BackupManager:
             self.state.update(connection=connection, quotaError=None)
             self.quota_checked = time.monotonic()
             self.quota_next = self.quota_checked + (30 if self.state['busy'] else 60)
+
+    def publish_volume(self, job, summary, force=False):
+        with self.lock:
+            self.live_folder_stats[job] = dict(summary)
+            instant = time.monotonic()
+            if force or instant - self.volume_saved.get(job, float('-inf')) >= 1:
+                with self.db() as database:
+                    database.execute('INSERT OR REPLACE INTO folder_volumes VALUES (?,?)',
+                                     (job, json.dumps(summary)))
+                self.volume_saved[job] = instant
 
     def refresh_quota(self, force=False):
         with self.lock:
@@ -1308,7 +1325,7 @@ class BackupManager:
                     layout.prime(layout.parent(job, Path('inventory')))
                 live_summary = None
                 if not preview and not only_paths:
-                    from .audit import config_stamp, local_usage
+                    from .audit import config_stamp, local_usage, volume_stamp
                     self.update(phase='اندازه‌گیری حجم کل پوشه', current=job['path'], fileStage=None)
                     cloud_items = []
                     pending_folders = [layout.parent(job, Path('inventory'))]
@@ -1325,20 +1342,21 @@ class BackupManager:
                             else:
                                 pending_folders.append(item['id'])
                     live_summary = dict(local_usage(self, Path(job['path'])),
-                        run=run, checkedAt=now(), configStamp=config_stamp(config),
+                        run=run, checkedAt=now(), measuredAt=time.time_ns(), configStamp=config_stamp(config),
+                        volumeStamp=volume_stamp(config),
                         localBytes=sum(self.file_size(path) for path in paths), localFiles=len(paths),
                         cloudBytes=sum(item['size'] for item in cloud_items), cloudFiles=len(cloud_items),
                         excluded=excluded_count, complete=False, issues=0, verifiedFiles=0,
                         assurance='size-and-identity', inProgress=True)
-                    with self.lock:
-                        self.live_folder_stats[job['id']] = dict(live_summary)
+                    self.publish_volume(job['id'], live_summary, force=True)
                 def cloud_volume(delta, count):
                     if live_summary is not None:
                         with self.lock:
                             live_summary['cloudBytes'] += delta
                             live_summary['cloudFiles'] += count
                             live_summary['checkedAt'] = now()
-                            self.live_folder_stats[job['id']] = dict(live_summary)
+                            live_summary['measuredAt'] = time.time_ns()
+                            self.publish_volume(job['id'], live_summary)
                 manifest = []
                 errors = result['errors']
                 root = Path(job['path'])
@@ -1514,6 +1532,8 @@ class BackupManager:
                                 submit_next()
                 finally:
                     flush_unchanged()
+                    if live_summary is not None:
+                        self.publish_volume(job['id'], live_summary, force=True)
                 if not preview:
                     for directory in empty_directories:
                         self.cancelled()

@@ -143,6 +143,11 @@ public final class Cloud {
             JSONArray page = result.getJSONArray("results");
             for (int index = 0; index < page.length(); index++) {
                 JSONObject item = page.getJSONObject(index);
+                if (item.has("is_current_version")) {
+                    Object current = item.get("is_current_version");
+                    if (!(current instanceof Boolean)) throw new UserError("وضعیت نسخهٔ فعلی فایل ابری معتبر نیست.");
+                    if (Boolean.FALSE.equals(current)) continue;
+                }
                 Policy.name(item.getString("name"));
                 long identifier = item.getLong("id");
                 if (identifier <= 0 || !identities.add(identifier) || java.util.Objects.equals(parent, identifier) ||

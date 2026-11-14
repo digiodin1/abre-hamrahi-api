@@ -1,6 +1,6 @@
 # Abre Hamrahi API
 
-Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.0** preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
+Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.2** preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
 
 [Download Windows and Android](https://github.com/digiodin1/abre-hamrahi-api/releases/latest)
 
@@ -37,6 +37,8 @@ The folder volume gauge uses exactly:
 ```
 
 Two empty totals yield 100; only one empty total yields 0. The value stays between 0 and 100 and does not use the current file's progress. Matching volume alone does not prove matching content. Folder observations show timestamps and become stale after changes. Physical local totals include explicitly excluded content, while eligibility is reported separately.
+
+Current folder totals exclude native historical versions returned by the provider; account-wide used quota can still include those versions. Windows persists fresh volume observations during transfers and recovers them after restart. A changed synchronization scope or an unreadable local size leaves the percentage unknown until it can be measured.
 
 Folder and file inventories show local/cloud sizes. Processing shows stages, loading state, transfer bytes, speed and failures. Reports retain 30 passes. Local links select recorded files in Explorer and never execute them.
 
