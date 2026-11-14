@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.1 - 2026-11-14
+
+- Align account quota precision with the provider's two-decimal display; clearly distinguish remaining space from used space and percentage.
+- Show quota observation seconds and exact remaining bytes on hover; preserve asynchronous refresh and stale-value warnings.
+- Match Android quota precision and show its last observed used/total capacity alongside remaining space.
+
 ## 1.7.0 - 2026-11-14
 
 - Save per-folder instant/daily schedules independently while uploads continue; preserve the running pass and durable daily deadlines.

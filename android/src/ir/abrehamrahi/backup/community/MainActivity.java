@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     private Store store;
     private LinearLayout content;
-    private TextView status, reports, current, counts;
+    private TextView status, reports, current, counts, quotaDetail;
     private ProgressBar progress;
     private String page = "status";
     private JSONObject captcha = new JSONObject();
@@ -105,7 +105,13 @@ public final class MainActivity extends Activity {
             if (capacityGauge != null) {
                 long capacity = store.preferences.getLong("capacity", -1), used = store.preferences.getLong("used", 0);
                 capacityGauge.set(capacity < 0 ? -1 : capacity == 0 ? 0 : 100.0 * Math.max(0, capacity - used) / capacity,
-                    capacity < 0 ? "—" : SyncPlan.bytes(Math.max(0, capacity - used)));
+                    capacity < 0 ? "—" : SyncPlan.bytes(Math.max(0, capacity - used), 2));
+                if (quotaDetail != null) {
+                    long checkedAt = store.preferences.getLong("quotaAt", 0);
+                    quotaDetail.setText(capacity < 0 ? "ظرفیت هنوز دریافت نشده." :
+                        "مصرف‌شده: " + SyncPlan.bytes(used, 2) + " از " + SyncPlan.bytes(capacity, 2) +
+                        " · آخرین بررسی: " + (checkedAt > 0 ? android.text.format.DateFormat.format("HH:mm:ss", checkedAt) : "—"));
+                }
             }
             if (current != null) current.setText(store.preferences.getString("current", ""));
             handler.postDelayed(this, 1000);
@@ -163,13 +169,13 @@ public final class MainActivity extends Activity {
 
     private void show(String selected) {
         page = selected;
-        status = null; reports = null; progress = null; counts = null; current = null;
+        status = null; reports = null; progress = null; counts = null; current = null; quotaDetail = null;
         capacityGauge = null; volumeGauge = null;
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
         screen.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         TextView title = new TextView(this);
-        title.setText("Abre Hamrahi API · 1.7.0");
+        title.setText("Abre Hamrahi API · 1.7.1");
         title.setTypeface(bold);
         title.setTextSize(22); title.setPadding(16, 32, 16, 16);
         screen.addView(title);
@@ -206,7 +212,9 @@ public final class MainActivity extends Activity {
         } else {
             capacityGauge = new GaugeView(this, regular, "فضای باقی‌ماندهٔ ابر");
             volumeGauge = new GaugeView(this, regular, "تطابق حجم ابر و محلی");
-            content.addView(capacityGauge); content.addView(volumeGauge);
+            content.addView(capacityGauge);
+            quotaDetail = text("");
+            content.addView(volumeGauge);
             status = text(store.preferences.getString("status", "آماده"));
             progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
             progress.setMax(100); content.addView(progress);

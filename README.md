@@ -27,7 +27,7 @@ Eight files upload concurrently by default, configurable from 1 to 16. Multipart
 
 ## Dashboard and reports
 
-The capacity gauge uses the provider's account-wide used space and plan plus gift capacity. Refresh runs separately from file transfers; failed refreshes retain and mark the last observation.
+The capacity gauge shows remaining space: plan plus gift capacity minus the provider's account-wide used bytes. The provider's sidebar shows used space instead. Both used and remaining values use binary units (1024) and two decimal places; the dashboard also labels used percentage and the quota observation time to the second. Hover over remaining space for exact bytes. Refresh runs separately from file transfers; failed refreshes retain and mark the last observation. During uploads, compare observations taken at the same time.
 
 The folder volume gauge uses exactly:
 

@@ -2,11 +2,12 @@
 const $ = id => document.getElementById(id);
 const nf = new Intl.NumberFormat('fa-IR');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const size = n => {
+const size = (n, digits=1) => {
   if (!n || n < 0) return '۰ بایت';
   const units = ['بایت','کیلوبایت','مگابایت','گیگابایت','ترابایت'];
   const i = Math.min(4, Math.floor(Math.log(n) / Math.log(1024)));
-  return nf.format(Math.round(n / 1024 ** i * 10) / 10) + ' ' + units[i];
+  const scale = 10 ** digits;
+  return nf.format(Math.round(n / 1024 ** i * scale) / scale) + ' ' + units[i];
 };
 const date = v => v ? new Date(v).toLocaleString('fa-IR', {dateStyle:'short', timeStyle:'short'}) : '—';
 let model = null, folders = [], dirty = false, initialized = false, captcha = {};
@@ -111,10 +112,13 @@ function renderGauges(state) {
   const remaining = known ? Math.max(0,connection.total-connection.used) : null;
   const freePercent = known ? remaining/connection.total*100 : null;
   setGauge('capacity',freePercent);
-  $('capacity-value').textContent = known ? size(remaining) : '—';
-  $('capacity-percent').textContent = known ? nf.format(Math.round(freePercent*10)/10)+'٪ آزاد' : 'ظرفیت بررسی نشده';
+  $('capacity-value').textContent = known ? size(remaining,2) : '—';
+  $('capacity-value').title = known ? nf.format(remaining)+' بایت آزاد' : '';
+  $('capacity-percent').textContent = known ? nf.format(Math.round(freePercent*100)/100)+'٪ آزاد' : 'ظرفیت بررسی نشده';
   const freshness = state.quotaError || (state.quotaRefreshing ? 'در حال دریافت ظرفیت' : state.quotaStale ? 'عدد آخرین بررسی؛ نیاز به به‌روزرسانی' : '');
-  $('capacity-detail').textContent = (known ? `مصرف‌شده: ${size(connection.used)} از ${size(connection.total)} · بررسی: ${date(connection.checkedAt)}` : 'ظرفیت هنوز دریافت نشده.') + (freshness ? ` · ${freshness}` : '');
+  const usedPercent = known ? nf.format(Math.round(connection.used/connection.total*10000)/100) : '';
+  const checkedAt = connection?.checkedAt ? new Date(connection.checkedAt).toLocaleString('fa-IR',{dateStyle:'short',timeStyle:'medium'}) : '—';
+  $('capacity-detail').textContent = (known ? `مصرف‌شده: ${size(connection.used,2)} از ${size(connection.total,2)} (${usedPercent}٪) · بررسی: ${checkedAt}` : 'ظرفیت هنوز دریافت نشده.') + (freshness ? ` · ${freshness}` : '');
   const match = model.syncMatch || {}, percent = Number.isFinite(match.percent) ? match.percent : null;
   setGauge('activity',percent);
   $('activity-value').textContent = Number.isFinite(percent) ? nf.format(match.complete ? 100 : Math.min(99.99, Math.round(percent*100)/100))+'٪' : '—';
@@ -178,7 +182,7 @@ function render() {
   $('connected-actions').hidden = !model.authenticated;
   $('auth-tag').textContent = model.authenticated ? 'متصل' : 'وارد نشده‌اید';
   $('connection').textContent = connection ? 'متصل' : model.authenticated ? 'حساب آماده' : 'نیاز به ورود';
-  $('quota').textContent = connection ? size(connection.used) + ' از ' + size(connection.total) : '—';
+  $('quota').textContent = connection ? `مصرف‌شده: ${size(connection.used,2)} از ${size(connection.total,2)}` : '—';
   $('folder-count').textContent = nf.format(c.folders.filter(f=>f.enabled).length);
   $('test-state').textContent = s.lastTest ? (s.lastTest.ok?'موفق':'ناموفق') : 'انجام نشده';
   $('test-state').className = s.lastTest ? (s.lastTest.ok?'success':'bad') : '';

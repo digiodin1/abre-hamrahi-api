@@ -194,8 +194,11 @@ public final class CloudChecks {
         expect(SyncPlan.ratio(10000, 100) == 1, "Volume ratio uses wrong direction");
         expect(SyncPlan.ratio(100, 10004) < 1, "Volume ratio exceeds 100");
         expect(SyncPlan.ratio(0, 0) == 100 && SyncPlan.ratio(1, 0) == 0, "Empty volume rules differ");
-        expect(SyncPlan.percent(99.9999).equals("99.9%"), "Unequal volumes rounded to 100");
+        expect(SyncPlan.percent(99.9999).equals("99.99%"), "Unequal volumes rounded to 100");
         expect(SyncPlan.bytes(1048576).equals("1.0 MiB"), "Byte units unclear");
+        expect(SyncPlan.bytes(3L * 1073741824 - 12345678, 2).equals("2.99 GiB"), "Remaining quota lost provider precision");
+        expect(SyncPlan.bytes(7L * 1073741824 + 12345678, 2).equals("7.01 GiB"), "Used quota lost provider precision");
+        expect(SyncPlan.percent(29.88502191).equals("29.89%"), "Quota percentage lost provider precision");
         JSONObject original = new JSONObject().put("id", 12).put("name", "اصل.txt").put("parent", 7).put("key", "key").put("size", 3);
         Fixture trash = new Fixture();
         trash.add("v2/flat/get-object/12/", 200, original.toString());

@@ -191,6 +191,15 @@ export async function runWebChecks() {
   model.state.connection.used=2048;
   await vm.runInContext('poll()', context);
   assert.equal(elements.get('capacity-gauge').attrs['aria-valuenow'],0);
+  model.state.connection={total:10*1024**3,used:7*1024**3+12345678,checkedAt:'2026-11-05T12:00:45Z'};
+  model.state.quotaStale=false;
+  await vm.runInContext('poll()', context);
+  assert.equal(elements.get('capacity-value').textContent,'۲٫۹۹ گیگابایت');
+  assert.equal(elements.get('capacity-percent').textContent,'۲۹٫۸۹٪ آزاد');
+  assert(elements.get('capacity-detail').textContent.includes('مصرف‌شده: ۷٫۰۱ گیگابایت از ۱۰ گیگابایت (۷۰٫۱۱٪)'));
+  assert(elements.get('quota').textContent.startsWith('مصرف‌شده: ۷٫۰۱'));
+  assert.equal(elements.get('capacity-value').title,new Intl.NumberFormat('fa-IR').format(3*1024**3-12345678)+' بایت آزاد');
+  assert(Math.abs(elements.get('capacity-gauge').attrs['aria-valuenow']-(3*1024**3-12345678)/(10*1024**3)*100)<1e-10);
   model.folderStats={[model.config.folders[0].id]:{localBytes:2048,cloudBytes:1024,verifiedFiles:1,localFiles:2,issues:1,excluded:3,stale:false,complete:false}};
   await vm.runInContext('poll()', context);
   assert(elements.get('folder-list').innerHTML.includes('محلی:'));

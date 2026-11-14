@@ -29,12 +29,16 @@ public final class SyncPlan {
     }
 
     public static String bytes(long size) {
+        return bytes(size, 1);
+    }
+
+    public static String bytes(long size, int digits) {
         if (size < 0) return "—";
         double amount = size;
         String[] units = {"بایت", "KiB", "MiB", "GiB", "TiB"};
         int unit = 0;
         while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++; }
-        return String.format(java.util.Locale.ROOT, unit == 0 ? "%.0f %s" : "%.1f %s", amount, units[unit]);
+        return String.format(java.util.Locale.ROOT, unit == 0 ? "%.0f %s" : "%." + digits + "f %s", amount, units[unit]);
     }
 
     public static double ratio(long local, long remote) {
@@ -45,6 +49,6 @@ public final class SyncPlan {
 
     public static String percent(double value) {
         if (value < 0) return "—";
-        return String.format(java.util.Locale.ROOT, "%.1f%%", value < 100 ? Math.min(99.9, value) : 100);
+        return String.format(java.util.Locale.ROOT, "%.2f%%", value < 100 ? Math.min(99.99, value) : 100);
     }
 }
