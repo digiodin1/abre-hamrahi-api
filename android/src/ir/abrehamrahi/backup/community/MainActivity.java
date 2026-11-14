@@ -3,9 +3,11 @@ package ir.abrehamrahi.backup.community;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.TimePickerDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.BitmapFactory;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -39,6 +41,8 @@ public final class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private boolean operation;
     private Backup activeBackup;
+    private Typeface regular, bold;
+    private GaugeView capacityGauge, volumeGauge;
 
     private interface Task { String run() throws Exception; }
 
@@ -46,6 +50,8 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = new Store(this);
+        regular = Typeface.createFromAsset(getAssets(), "fonts/iransansx-regular.ttf");
+        bold = Typeface.createFromAsset(getAssets(), "fonts/iransansx-bold.ttf");
         if (!store.preferences.contains("remoteRoot")) {
             String model = Build.MODEL.replaceAll("[^\\p{L}\\p{N} _-]", "_");
             store.preferences.edit().putString("remoteRoot", "Android " + model).apply();
@@ -74,11 +80,33 @@ public final class MainActivity extends Activity {
             if (status != null) status.setText(store.preferences.getString("status", "آماده"));
             if (reports != null) reports.setText(store.preferences.getString("reports", "هنوز گزارشی نیست."));
             int total = store.preferences.getInt("total", 0), done = store.preferences.getInt("done", 0);
+            long totalBytes = store.preferences.getLong("totalBytes", 0), doneBytes = store.preferences.getLong("doneBytes", 0);
+            int percent = totalBytes == 0 ? (total > 0 && done == total ? 100 : 0) : (int)Math.min(100, 100.0 * doneBytes / totalBytes);
             if (progress != null) {
                 progress.setIndeterminate(Backup.RUNNING.get() && total == 0);
-                progress.setProgress(total == 0 ? 0 : Math.min(100, done * 100 / total));
+                progress.setProgress(percent);
             }
-            if (counts != null) counts.setText(done + " / " + total + " فایل · " + (total == 0 ? 0 : done * 100 / total) + "٪");
+            if (counts != null) counts.setText(SyncPlan.bytes(doneBytes) + " / " + SyncPlan.bytes(totalBytes) + " · " + percent + "٪ · " + done + " / " + total + " فایل");
+            if (volumeGauge != null) {
+                long local = 0, remote = 0;
+                boolean known = true;
+                try {
+                    JSONArray roots = new JSONArray(store.preferences.getString("folders", "[]"));
+                    known = roots.length() > 0;
+                    for (int index = 0; index < roots.length(); index++) {
+                        String tree = roots.getString(index);
+                        known &= store.preferences.contains("local:" + tree) && store.preferences.contains("cloud:" + tree);
+                        local += store.preferences.getLong("local:" + tree, 0);
+                        remote += store.preferences.getLong("cloud:" + tree, 0);
+                    }
+                } catch (Exception error) { known = false; }
+                volumeGauge.set(known ? SyncPlan.ratio(local, remote) : -1, SyncPlan.bytes(remote) + " / " + SyncPlan.bytes(local));
+            }
+            if (capacityGauge != null) {
+                long capacity = store.preferences.getLong("capacity", -1), used = store.preferences.getLong("used", 0);
+                capacityGauge.set(capacity < 0 ? -1 : capacity == 0 ? 0 : 100.0 * Math.max(0, capacity - used) / capacity,
+                    capacity < 0 ? "—" : SyncPlan.bytes(Math.max(0, capacity - used)));
+            }
             if (current != null) current.setText(store.preferences.getString("current", ""));
             handler.postDelayed(this, 1000);
         }
@@ -88,6 +116,7 @@ public final class MainActivity extends Activity {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(16);
+        view.setTypeface(regular);
         view.setPadding(8, 12, 8, 12);
         content.addView(view);
         return view;
@@ -96,6 +125,7 @@ public final class MainActivity extends Activity {
     private EditText field(String hint, int type) {
         EditText view = new EditText(this);
         view.setHint(hint);
+        view.setTypeface(regular);
         view.setInputType(type);
         view.setSaveEnabled(false);
         view.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
@@ -106,6 +136,7 @@ public final class MainActivity extends Activity {
     private Button button(String title, Runnable action) {
         Button button = new Button(this);
         button.setText(title);
+        button.setTypeface(regular);
         button.setOnClickListener(view -> action.run());
         content.addView(button);
         return button;
@@ -133,11 +164,13 @@ public final class MainActivity extends Activity {
     private void show(String selected) {
         page = selected;
         status = null; reports = null; progress = null; counts = null; current = null;
+        capacityGauge = null; volumeGauge = null;
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
         screen.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         TextView title = new TextView(this);
-        title.setText("Abre Hamrahi API · 1.5.0");
+        title.setText("Abre Hamrahi API · 1.7.0");
+        title.setTypeface(bold);
         title.setTextSize(22); title.setPadding(16, 32, 16, 16);
         screen.addView(title);
         ScrollView navigation = new ScrollView(this);
@@ -149,6 +182,7 @@ public final class MainActivity extends Activity {
             String key = keys[index];
             Button tab = new Button(this);
             tab.setText(names[index]); tab.setTextSize(12); tab.setAllCaps(false);
+            tab.setTypeface(regular);
             tab.setEnabled(!key.equals(selected));
             tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setPadding(0, 0, 0, 0);
             tab.setOnClickListener(view -> show(key));
@@ -168,13 +202,18 @@ public final class MainActivity extends Activity {
             reports = text(store.preferences.getString("reports", "هنوز گزارشی نیست."));
             reports.setTextIsSelectable(true);
             button("تلاش مجدد", () -> start(false));
+            button("فایل‌ها و خطاها", () -> files(0));
         } else {
+            capacityGauge = new GaugeView(this, regular, "فضای باقی‌ماندهٔ ابر");
+            volumeGauge = new GaugeView(this, regular, "تطابق حجم ابر و محلی");
+            content.addView(capacityGauge); content.addView(volumeGauge);
             status = text(store.preferences.getString("status", "آماده"));
             progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
             progress.setMax(100); content.addView(progress);
             counts = text(""); current = text("");
+            button("فایل‌ها و خطاها", () -> files(0));
             button("پیش‌نمایش محلی", () -> start(true));
-            button("بکاپ / تلاش مجدد", () -> start(false));
+            button("سینک / تلاش مجدد", () -> start(false));
             button("شروع پایش تغییرات", this::automatic);
             button("توقف همگام‌سازی", this::stop);
             button("بازکردن ابر", () -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://abrehamrahi.ir/drive/files"))));
@@ -267,7 +306,6 @@ public final class MainActivity extends Activity {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
             startActivityForResult(intent, 10);
         });
-        text("فقط پوشه‌های انتخاب‌شده خوانده می‌شوند؛ فایل‌های کلید، نشست و موقت کنار گذاشته می‌شوند.");
         try {
             JSONArray roots = new JSONArray(store.preferences.getString("folders", "[]"));
             for (int index = 0; index < roots.length(); index++) {
@@ -276,6 +314,16 @@ public final class MainActivity extends Activity {
                 try { name = Backup.documentName(this, Uri.parse(value)); }
                 catch (Exception error) { name = "پوشهٔ نیازمند اجازهٔ مجدد"; }
                 text(name);
+                text("محلی: " + SyncPlan.bytes(store.preferences.getLong("local:" + value, -1)) +
+                    " · ابر: " + SyncPlan.bytes(store.preferences.getLong("cloud:" + value, -1)));
+                JSONObject plan = new JSONObject(store.preferences.getString("folderPlans", "{}")).optJSONObject(value);
+                String mode = plan == null ? "instant" : plan.optString("mode", "instant");
+                String time = plan == null ? "02:00" : plan.optString("time", "02:00");
+                button(("instant".equals(mode) ? "✓ " : "") + "سینک آنی", () -> savePlan(value, "instant", time));
+                button(("daily".equals(mode) ? "✓ " : "") + "سینک روزانه · " + time, () ->
+                    new TimePickerDialog(this, (picker, hour, minute) -> savePlan(value, "daily",
+                        String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minute)),
+                        Integer.parseInt(time.substring(0, 2)), Integer.parseInt(time.substring(3)), true).show());
                 button("حذف از فهرست", () -> {
                     if (Backup.RUNNING.get()) { alert("ابتدا همگام‌سازی را متوقف کنید."); return; }
                     try {
@@ -289,6 +337,69 @@ public final class MainActivity extends Activity {
                     } catch (Exception error) { alert(Backup.friendly(error)); }
                 });
             }
+        } catch (Exception error) { alert(Backup.friendly(error)); }
+    }
+
+    private void savePlan(String tree, String mode, String time) {
+        try {
+            synchronized (Store.PLAN_LOCK) {
+                JSONObject plans = new JSONObject(store.preferences.getString("folderPlans", "{}"));
+                plans.put(tree, SyncPlan.configure(mode, time, System.currentTimeMillis()));
+                if (!store.preferences.edit().putString("folderPlans", plans.toString()).commit()) throw new UserError("ذخیره ناموفق بود.");
+            }
+            show("folders");
+        } catch (Exception error) { alert(Backup.friendly(error)); }
+    }
+
+    private void files(int offset) {
+        try (android.database.sqlite.SQLiteDatabase database = openOrCreateDatabase("backup.db", MODE_PRIVATE, null)) {
+            database.enableWriteAheadLogging();
+            database.execSQL("CREATE TABLE IF NOT EXISTS run_items (path TEXT PRIMARY KEY, data TEXT NOT NULL)");
+            LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
+            rows.setPadding(16, 8, 16, 8);
+            ScrollView scroll = new ScrollView(this); scroll.addView(rows);
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle("فایل‌ها · " + (offset / 100 + 1))
+                .setView(scroll).setPositiveButton("بستن", null).create();
+            int count = 0;
+            try (android.database.Cursor cursor = database.rawQuery(
+                    "SELECT data FROM run_items ORDER BY path LIMIT 100 OFFSET ?",
+                    new String[]{Integer.toString(offset)})) {
+                while (cursor.moveToNext()) {
+                    JSONObject item = new JSONObject(cursor.getString(0));
+                    count++;
+                    TextView label = new TextView(this); label.setTypeface(regular);
+                    boolean failed = "error".equals(item.optString("status"));
+                    label.setText(item.getString("path") + "\nمحلی: " + SyncPlan.bytes(item.optLong("size", -1)) +
+                        " · ابر: " + SyncPlan.bytes(item.optLong("cloudBytes", -1)) + "\n" +
+                        (failed ? "✕ " + item.optString("error") : "queued".equals(item.optString("status")) ? "در صف" : "✓"));
+                    label.setPadding(8, 14, 8, 10); rows.addView(label);
+                    Button open = new Button(this); open.setTypeface(regular); open.setText("بازکردن فایل");
+                    String uri = item.getString("uri");
+                    open.setOnClickListener(view -> {
+                        try {
+                            Uri source = Uri.parse(uri);
+                            String type = getContentResolver().getType(source);
+                            startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(source, type == null ? "application/octet-stream" : type)
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+                        } catch (Exception error) { alert("فایل یا برنامهٔ مناسب برای بازکردن آن در دسترس نیست."); }
+                    });
+                    rows.addView(open);
+                    if (failed) {
+                        Button retry = new Button(this); retry.setText("تلاش مجدد"); retry.setTypeface(regular);
+                        String retryPath = item.getString("path");
+                        retry.setOnClickListener(view -> { dialog.dismiss(); start(false, retryPath); }); rows.addView(retry);
+                    }
+                }
+            }
+            if (offset > 0) {
+                Button previous = new Button(this); previous.setText("قبلی"); previous.setTypeface(regular);
+                previous.setOnClickListener(view -> { dialog.dismiss(); files(offset - 100); }); rows.addView(previous);
+            }
+            if (count == 100) {
+                Button next = new Button(this); next.setText("بعدی"); next.setTypeface(regular);
+                next.setOnClickListener(view -> { dialog.dismiss(); files(offset + 100); }); rows.addView(next);
+            }
+            dialog.show();
         } catch (Exception error) { alert(Backup.friendly(error)); }
     }
 
@@ -311,33 +422,36 @@ public final class MainActivity extends Activity {
         EditText root = field("پوشهٔ اصلی در ابر", InputType.TYPE_CLASS_TEXT);
         root.setText(store.preferences.getString("remoteRoot", "Android"));
         root.setEnabled(store.preferences.getString("indexedRoot", "").isEmpty());
-        EditText limit = field("حداکثر اندازهٔ هر فایل (۱ تا ۱۰۰ مگابایت)", InputType.TYPE_CLASS_NUMBER);
-        limit.setText(Integer.toString(store.preferences.getInt("maxMiB", 50)));
+        EditText limit = field("حداکثر اندازهٔ فایل (MiB؛ صفر: بدون محدودیت)", InputType.TYPE_CLASS_NUMBER);
+        limit.setText(Integer.toString(store.preferences.getInt("maxMiB", 0)));
         CheckBox wifi = new CheckBox(this);
         wifi.setText("فقط اتصال بدون هزینهٔ حجمی (معمولاً Wi-Fi)");
+        wifi.setTypeface(regular);
         wifi.setChecked(store.preferences.getBoolean("wifiOnly", true)); content.addView(wifi);
         button("ذخیرهٔ تنظیمات", () -> {
             if (Backup.RUNNING.get()) { alert("ابتدا همگام‌سازی را متوقف کنید."); return; }
             try {
                 String name = Policy.name(root.getText().toString());
                 int maximum = Integer.parseInt(digits(limit.getText().toString()));
-                if (maximum < 1 || maximum > 100) throw new NumberFormatException();
+                if (maximum < 0) throw new NumberFormatException();
                 store.preferences.edit().putString("remoteRoot", name).putInt("maxMiB", maximum)
                     .putBoolean("wifiOnly", wifi.isChecked()).commit();
                 SyncService.schedule(this, store.preferences.getBoolean("automatic", false));
                 alert("ذخیره شد.");
             } catch (Exception error) { alert("نام ریشه یا اندازهٔ فایل معتبر نیست."); }
         });
-        text("پایش سریع: بررسی تغییرات هر ۳۰ ثانیه با اعلان فعال. زمان‌بندی پس‌زمینه: حداقل ۱۵ دقیقه و تابع محدودیت باتری اندروید. اندروید ۱۵ ممکن است سرویس ارسال داده را پس از سقف زمانی متوقف کند. برای ادامهٔ پایش سریع، برنامه را باز و شروع را بزنید.");
-        text("بازیابی: از ابر، فایل اصلی یا نسخهٔ قبلی در _abre-android-data/history را دانلود کنید. حذف فایل گوشی، نسخهٔ ابری را حذف نمی‌کند.");
     }
 
     private void start(boolean preview) {
+        start(preview, null);
+    }
+
+    private void start(boolean preview, String retryPath) {
         if (Backup.RUNNING.get()) { alert("عملیات دیگری در حال اجراست."); return; }
         if (!preview && !SyncService.networkAllowed(this, store)) { alert("اتصال مطابق تنظیمات شبکه برقرار نیست."); return; }
         show("status");
         if (!preview) {
-            try { startForegroundService(new Intent(this, SyncService.class).setAction("once")); }
+            try { startForegroundService(new Intent(this, SyncService.class).setAction("once").putExtra("retryPath", retryPath)); }
             catch (Exception error) { alert("شروع سرویس ارسال ممکن نشد؛ دوباره برنامه را باز کنید."); }
             return;
         }

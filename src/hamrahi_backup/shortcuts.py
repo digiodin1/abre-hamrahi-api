@@ -51,6 +51,7 @@ def create_link(destination, target, arguments, working_directory):
         invoke(link, 9, [wintypes.LPCWSTR], str(working_directory))
         invoke(link, 7, [wintypes.LPCWSTR], 'Start or open Abre Hamrahi API')
         invoke(link, 15, [ctypes.c_int], 7)
+        invoke(link, 17, [wintypes.LPCWSTR, ctypes.c_int], str(Path(__file__).with_name('web') / 'app.ico'), 0)
         invoke(link, 0, [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
                ctypes.byref(persist_iid), ctypes.byref(persist))
         invoke(persist, 6, [wintypes.LPCWSTR, wintypes.BOOL], str(destination), True)
@@ -79,7 +80,8 @@ def create_shortcuts(directory, port, desktop=None):
     link = desktop / 'Abre Hamrahi API.lnk'
     create_link(link, executable, arguments, executable.parent)
     (desktop / 'Abre Hamrahi Cloud.url').write_text(
-        '[InternetShortcut]\nURL=https://abrehamrahi.ir/drive/files\n', encoding='ascii')
+        '[InternetShortcut]\nURL=https://abrehamrahi.ir/drive/files\nIconFile=' +
+        str(Path(__file__).with_name('web') / 'app.ico') + '\nIconIndex=0\n', encoding='utf-8')
     return link
 
 

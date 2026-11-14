@@ -19,7 +19,7 @@ public final class SyncJob extends JobService {
         ExecutorService owner = executor;
         int attempt = ++generation;
         owner.submit(() -> {
-            try { task.run(false); }
+            try { task.run(false, true); }
             finally {
                 if (generation == attempt) jobFinished(parameters, false);
                 owner.shutdown();

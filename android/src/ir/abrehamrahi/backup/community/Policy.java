@@ -6,9 +6,6 @@ import java.net.URI;
 import java.util.Locale;
 
 public final class Policy {
-    public static final int MAX_FILES = 5000;
-    public static final long MAX_BYTES = 100L * 1024 * 1024;
-
     private Policy() {}
 
     public static String name(String value) throws IOException {
@@ -20,18 +17,7 @@ public final class Policy {
     }
 
     public static boolean excluded(String value) {
-        String lower = value.toLowerCase(Locale.ROOT);
-        return lower.equals(".git") || lower.equals("node_modules") || lower.equals(".qa") ||
-            lower.equals(".venv") || lower.equals(".backup") || lower.equals("build") ||
-            lower.equals("dist") || lower.equals("__pycache__") || lower.startsWith(".env") ||
-            lower.equals(".private") || lower.equals(".runtime") || lower.equals("credentials") ||
-            lower.equals("credentials.json") || lower.equals(".ssh") || lower.equals(".aws") ||
-            lower.equals(".azure") || lower.equals(".kube") || lower.equals(".npmrc") ||
-            lower.equals(".pypirc") || lower.equals(".netrc") || lower.startsWith("id_rsa") ||
-            lower.startsWith("id_ed25519") || lower.endsWith(".dpapi") || lower.endsWith(".keystore") ||
-            lower.startsWith("session.") || lower.endsWith(".key") || lower.endsWith(".pem") ||
-            lower.endsWith(".jks") || lower.endsWith(".p12") || lower.endsWith(".pfx") ||
-            lower.endsWith(".tmp") || lower.endsWith(".log");
+        return false;
     }
 
     public static URI transferUri(String value) throws IOException {

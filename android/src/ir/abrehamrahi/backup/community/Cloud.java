@@ -135,6 +135,7 @@ public final class Cloud {
 
     public List<JSONObject> list(Long parent) throws Exception {
         List<JSONObject> items = new ArrayList<>();
+        java.util.Set<Long> identities = new java.util.HashSet<>();
         for (int offset = 0; offset <= 1000000; offset += 1000) {
             String path = "v2/flat/list-objects/?is_trash=false&recursive=false&limit=1000&offset=" + offset;
             if (parent != null) path += "&parent=" + URLEncoder.encode(parent.toString(), "UTF-8");
@@ -142,8 +143,12 @@ public final class Cloud {
             JSONArray page = result.getJSONArray("results");
             for (int index = 0; index < page.length(); index++) {
                 JSONObject item = page.getJSONObject(index);
-                item.getString("name");
-                item.getLong("id");
+                Policy.name(item.getString("name"));
+                long identifier = item.getLong("id");
+                if (identifier <= 0 || !identities.add(identifier) || java.util.Objects.equals(parent, identifier) ||
+                        (parent == null ? !item.isNull("parent") : item.optLong("parent", -1) != parent) || item.optBoolean("is_trash")) {
+                    throw new UserError("فهرست پوشهٔ ابری معتبر نیست.");
+                }
                 items.add(item);
             }
             if (result.isNull("next") || Boolean.FALSE.equals(result.opt("next")) || result.optString("next").isEmpty()) return items;
@@ -152,9 +157,32 @@ public final class Cloud {
         throw new UserError("صفحه‌بندی ابر معتبر نیست.");
     }
 
+    private final java.util.Map<Long, List<JSONObject>> listings = new java.util.HashMap<>();
+    private boolean caching;
+
+    public void beginSync() { listings.clear(); caching = true; }
+
+    public List<JSONObject> listing(Long parent) throws Exception {
+        if (!caching) return list(parent);
+        if (!listings.containsKey(parent)) listings.put(parent, list(parent));
+        return listings.get(parent);
+    }
+
+    private void invalidate(Long parent) { listings.remove(parent); }
+
+    private void rememberListing(JSONObject item, Long parent) throws Exception {
+        List<JSONObject> cached = listings.get(parent);
+        if (cached == null) return;
+        String name = item.getString("name");
+        for (int index = cached.size() - 1; index >= 0; index--) {
+            if (name.equals(cached.get(index).getString("name"))) cached.remove(index);
+        }
+        cached.add(item);
+    }
+
     public JSONObject named(Long parent, String name) throws Exception {
         JSONObject match = null;
-        for (JSONObject item : list(parent)) {
+        for (JSONObject item : listing(parent)) {
             if (name.equals(item.getString("name"))) {
                 if (match != null) throw new UserError("چند شیء با نام یکسان در مقصد وجود دارد: " + name);
                 match = item;
@@ -178,13 +206,43 @@ public final class Cloud {
                 item = json("POST", "v2/flat/create-folder/", new JSONObject().put("name", name)
                     .put("parent", parent == null ? JSONObject.NULL : parent), true);
             } catch (Exception error) {
+                invalidate(parent);
                 item = named(parent, name);
                 if (item == null) throw error;
             }
         }
         if (!item.isNull("key") && !item.optString("key").isEmpty()) throw new UserError("فایل با نام پوشه تعارض دارد: " + name);
         exact(item, name, parent);
+        rememberListing(item, parent);
         return item.getLong("id");
+    }
+
+    private void unchanged(JSONObject expected, JSONObject actual) throws Exception {
+        for (String field : new String[]{"id", "name", "parent", "key", "size"}) {
+            if (!java.util.Objects.equals(expected.opt(field), actual.opt(field))) {
+                throw new UserError("فایل ابری تغییر کرده است؛ عملیات متوقف شد.");
+            }
+        }
+    }
+
+    public void trash(JSONObject expected) throws Exception {
+        long identifier = expected.getLong("id");
+        JSONObject before = object(identifier);
+        unchanged(expected, before);
+        if (before.optBoolean("is_trash")) return;
+        Exception failure = null;
+        try {
+            json("DELETE", "v2/rgw/trash-objects/", new JSONObject().put("obj_ids", new JSONArray().put(identifier)), true);
+        } catch (Exception error) { failure = error; }
+        JSONObject after = object(identifier);
+        unchanged(expected, after);
+        if (!after.optBoolean("is_trash")) {
+            if (failure != null) throw failure;
+            throw new UserError("انتقال به سطل زباله تأیید نشد.");
+        }
+        Long parent = expected.isNull("parent") ? null : expected.getLong("parent");
+        List<JSONObject> cached = listings.get(parent);
+        if (cached != null) cached.removeIf(item -> item.optLong("id", -1) == identifier);
     }
 
     public JSONObject object(long identifier) throws Exception {
@@ -236,6 +294,10 @@ public final class Cloud {
     }
 
     public JSONObject upload(File file, String name, long parent, BeforeComplete beforeComplete) throws Exception {
+        return upload(file, name, parent, beforeComplete, null);
+    }
+
+    public JSONObject upload(File file, String name, long parent, BeforeComplete beforeComplete, JSONObject replacement) throws Exception {
         long size = file.length();
         JSONObject info = json("POST", "v2/flat/start-upload/", new JSONObject().put("obj_size", size), true);
         JSONArray urls = info.getJSONArray("signed_urls"), parts = new JSONArray();
@@ -270,11 +332,29 @@ public final class Cloud {
             }
         }
         beforeComplete.record(info.getString("key"));
-        JSONObject result = json("POST", "v2/flat/complete-upload/", new JSONObject().put("key", info.get("key"))
+        if (replacement != null) {
+            JSONObject before = object(replacement.getLong("id"));
+            unchanged(replacement, before);
+            if (before.optBoolean("is_trash")) throw new UserError("فایل مقصد در سطل زباله است.");
+        }
+        JSONObject completion = new JSONObject().put("key", info.get("key"))
             .put("upload_id", info.get("upload_id")).put("name", name).put("parent", parent)
-            .put("parts", parts).put("force_overwrite", false), true);
+            .put("parts", parts).put("force_overwrite", replacement != null);
+        if (replacement != null && !replacement.isNull("version_group")) completion.put("version_group", replacement.get("version_group"));
+        JSONObject result;
+        try { result = json("POST", "v2/flat/complete-upload/", completion, true); }
+        catch (Exception error) { invalidate(parent); throw error; }
         exact(result, name, parent);
         if (result.getLong("size") != size) throw new UserError("اندازهٔ فایل ارسال‌شده صحیح نیست.");
-        return result;
+        String finalKey = result.getString("key");
+        for (int attempt = 0; attempt < 3; attempt++) {
+            JSONObject fresh = object(result.getLong("id"));
+            exact(fresh, name, parent);
+            if (!fresh.optBoolean("is_trash") && fresh.optLong("size", -1) == size && finalKey.equals(fresh.optString("key"))) {
+                rememberListing(fresh, parent);
+                return fresh;
+            }
+        }
+        throw new UserError("اندازه یا مشخصات نهایی فایل در ابر تأیید نشد؛ نوبت بعد دوباره بررسی می‌شود.");
     }
 }

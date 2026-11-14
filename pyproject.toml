@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "abre-hamrahi-api"
-version = "1.5.0"
-description = "Abre Hamrahi API: local versioned backup panel for Abrehamrahi"
+version = "1.7.0"
+description = "Abre Hamrahi API: local folder synchronization for Abrehamrahi"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE.md"]
 authors = [{name = "Abre Hamrahi API contributors"}]
 dependencies = []
 keywords = ["backup", "abrehamrahi", "windows", "persian"]
@@ -38,4 +38,4 @@ Issues = "https://github.com/digiodin1/abre-hamrahi-api/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-hamrahi_backup = ["web/*.html", "web/*.css", "web/*.js"]
+hamrahi_backup = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg", "web/*.ico", "web/*.woff2"]

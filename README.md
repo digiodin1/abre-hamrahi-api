@@ -1,84 +1,50 @@
 # Abre Hamrahi API
 
-Abre Hamrahi API is a free, open-source, local Windows panel for one-way, versioned backups to Abrehamrahi. It scans folders you choose, preserves their original file names, uploads only changed content, and verifies every uploaded object with SHA-256 when verification is enabled.
+Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.0** preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
 
-Version **1.5.0** keeps folder selection available during uploads and adds a Windows notification area icon to the standalone application. Closing the browser leaves backup running; open it again from the icon or desktop shortcut. Settings changes take effect after the active run completes and you save them. The application release status does not imply official provider support.
+[Download Windows and Android](https://github.com/digiodin1/abre-hamrahi-api/releases/latest)
 
-A native [Android APK](docs/android.md) is also available for selecting and backing up phone folders directly to the cloud. Its initial build has adapter and signature checks but still requires physical-device validation. Android background work follows the operating system's scheduling limits.
+## Windows
 
-The project is intentionally conservative:
+Install the Windows x64 setup from Releases, open **Abre Hamrahi API**, sign in with your own account, select folders, and save. Choose **Instant** or **Daily** with a local time beside each folder. These schedule controls save immediately and remain available during uploads; an ongoing pass finishes with its captured configuration.
 
-- It never deletes cloud objects or local files.
-- A failed or unverified upload is not written to the local index.
-- SQLite files are copied through a read-only snapshot so committed WAL data is included.
-- Passwords and one-time codes are never written. The access and refresh session is encrypted with Windows DPAPI and kept in the private data directory.
-- The panel binds to `127.0.0.1` only, uses a per-process CSRF token, rejects cross-origin requests, and serves a fixed asset allowlist.
-- The API rejects non-loopback peers, sends browser isolation headers, and checks signed-transfer DNS twice to detect a changing destination.
-- Preview mode works without contacting the provider and is the recommended first run.
+Enable automatic synchronization for unattended work. Enable **Run at Windows sign-in** separately if desired. The program runs in the notification area; closing the browser leaves synchronization running. Startup and unattended updates do not repeatedly open browser tabs. Use the tray icon or shortcut to reopen the panel.
 
-## Provider status
+The remote root defaults to the computer name. Source folder and file names remain exact. Two selected roots cannot share a name. Only one process can own a private profile. Credentials are encrypted with Windows DPAPI and are never returned by the local API.
 
-This is an unofficial integration. As of November 4, 2026, Abrehamrahi did not publish a stable public developer API or WebDAV contract for this workflow. The adapter therefore fails closed when a response does not match the small set of observed endpoints. A provider-side change can require an adapter update. Do not make this your only copy of important data.
+## Synchronization and recovery
 
-## Install on Windows
+- Changed files use native replacement in the same destination, without creating custom history copies or uploading manifests.
+- Local deletions use native cloud trash after a complete, error-free source scan and successful file transfers for that folder. Missing roots, scan errors, conflicting metadata, partial retries and protected exclusions prevent unsafe cleanup. The client never permanently empties trash.
+- Source-to-cloud synchronization does not automatically download cloud edits. Unexpected or conflicting remote content is reported rather than silently overwritten. Cloud restoration is available through the provider's interface.
+- Normal uploads require fresh object metadata confirming exact byte size, object ID, finalized storage key, name and parent. Optional SHA-256 readback downloads the uploaded content for a stronger check.
+- File failures retain their reasons and retry controls. Automatic retries use bounded backoff. Durable local indexing preserves completed work across restarts. An ambiguous completion is reconciled with current cloud content instead of blindly repeating the write.
+- Older custom history created by previous releases remains intact; upgrading does not erase historical data. The hidden legacy `syncBehavior: "versioned"` API setting is retained for compatibility. New and migrated profiles default to `mirror`.
 
-Python 3.11 or newer is required. The basic install has no third-party runtime dependency. File changes are detected every two seconds; installing the optional `watchdog` package enables native filesystem notifications instead.
+There are no default content/extension exclusions or application file-size cap. Existing explicit exclusions survive upgrades. The running application's own state is protected against recursive synchronization. Links and junctions are reported instead of followed. Files that cannot be read or are changing remain visible errors and are retried. Provider quota and transfer limits still apply.
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install .
-abre-hamrahi-api
+Eight files upload concurrently by default, configurable from 1 to 16. Multipart files stream up to four parts concurrently. Directory inventories and HTTPS connections are reused, files are sent largest first, and change events normally process only affected paths. Periodic reconciliation repairs missed notifications. Automatic unchanged-file checks may reuse filesystem fingerprints; manual sync rereads content.
+
+## Dashboard and reports
+
+The capacity gauge uses the provider's account-wide used space and plan plus gift capacity. Refresh runs separately from file transfers; failed refreshes retain and mark the last observation.
+
+The folder volume gauge uses exactly:
+
+```text
+100 × min(total physical local bytes, total visible cloud bytes)
+    / max(total physical local bytes, total visible cloud bytes)
 ```
 
-The command opens the local panel in your default browser. The process must remain running for scheduled work; the browser does not. Use `abre-hamrahi-api --no-browser` on a machine where you want to open the panel yourself. The compatibility command `abr-hamrahi-api` remains available. The default private state directory is `%LOCALAPPDATA%\AbrHamrahiAPI`; it is outside the installed package.
+Two empty totals yield 100; only one empty total yields 0. The value stays between 0 and 100 and does not use the current file's progress. Matching volume alone does not prove matching content. Folder observations show timestamps and become stale after changes. Physical local totals include explicitly excluded content, while eligibility is reported separately.
 
-Use **Settings → Exit application** to stop the background process. Confirming requests cancellation of active work and waits for bounded cleanup; saved settings, login and completed backups remain available on the next launch. Closing a browser tab alone keeps the process running. The [local API reference](docs/local-api.md) documents the protected shutdown endpoint. Exit does not remove an existing Windows sign-in startup entry.
+Folder and file inventories show local/cloud sizes. Processing shows stages, loading state, transfer bytes, speed and failures. Reports retain 30 passes. Local links select recorded files in Explorer and never execute them.
 
-For a portable or test directory:
+## Android
 
-```powershell
-abre-hamrahi-api --data-dir C:\AbrHamrahiAPIState --port 8765
-```
+The native Android 8.0+ APK signs into the cloud separately. It uses the system folder chooser, per-folder instant/daily schedules, native replacement/trash, fresh upload metadata verification, byte-based progress, volume/capacity gauges, and bundled IRANSansX fonts. It does not connect to the Windows API or expose the computer.
 
-Only the loopback address is accepted. Do not expose the port through a firewall, reverse proxy, tunnel, or LAN binding.
-
-The provider cannot call this local API back into your computer. A process already running as your Windows user remains outside this tool’s protection boundary.
-
-## First run
-
-For desktop shortcuts and safe setup of a project parent directory, see
-[Desktop launcher and project folders](docs/desktop-and-projects.md). The command
-`abre-hamrahi-open` opens an existing instance or starts it before opening the UI.
-
-1. Open the panel and sign in with the account owner’s phone and either the one-time code or account password. Complete any provider registration or terms step on the official site first.
-2. Add one or more local folders. Do not select the state directory, a drive root, a symlink, a mounted credential store, or a folder containing secrets you do not want to back up.
-3. Save the settings and run **Preview without upload**. Resolve missing-folder, permissions, live-database, size, and exclusion messages.
-4. Run **Connection and capacity check**, then **Upload and restore test**. The test creates a small file under `_connection-tests`, downloads it, and compares its SHA-256 hash. It is intentionally left in the cloud so the result is inspectable.
-5. Run a real sync. Turn on automatic sync only after a successful preview and round-trip test. With **Start sync when files change** enabled, filesystem notifications are debounced until the file has stopped changing, then the next sync uploads changed content. A periodic full check remains as a recovery pass for missed notifications.
-
-Automatic sync can be paused and resumed from the panel. If the computer is offline or the provider rejects a request, retries use bounded backoff and the next change remains pending; the local source is never deleted.
-
-**Automatic sync** is the master switch for the periodic reconciliation. **Also start when files change** adds the faster change trigger; it is available only when automatic sync is enabled. Neither setting starts the application after Windows logon. Enable **Run at Windows sign-in** in Settings and save to register the current interpreter, state directory, and port under the current user's Windows Run key. Turn it off and save before uninstalling or moving the installation. It starts without a browser and requires no administrator privileges.
-
-New cloud roots default to the computer name. Source folders, nested folders, and files retain their exact names; there is no cloud alias. Two selected source folders cannot share a name. The updated layout migrates indexed legacy names in place after verification and stops if old and new trees conflict. If the provider rejects or changes a name, the error is reported instead of silently renaming it. See [names, migration, and history](docs/names-and-history.md) before upgrading.
-
-The Processing page shows stages and every eligible file in pages of 100, with errors first. Retry beside a failed file processes only that file and generates a partial manifest. It does not acknowledge unrelated pending changes. Reports retain the last 30 runs, including file results and partial successes. An interrupted run is recovered at the next start. File links select the recorded local file in Windows Explorer; they never execute arbitrary files. Removed, excluded, disabled, or linked source paths cannot be opened or retried through this API.
-
-See [automatic sync and desktop behavior](docs/automatic-sync.md) for settings, the Google Drive for desktop design references, and the supported behavior. For native Windows change notifications, install with `python -m pip install ".[native]"`. The folder picker requires the Tcl/Tk component of the standard Python Windows installer; manual path entry remains available.
-
-The [local API reference](docs/local-api.md) documents file reports, retries, startup settings, and request protections.
-
-Changed files move their verified predecessors into `_abre-backup-data/history` before the new content is uploaded with its original name. There are no overwrite or delete requests. Interrupted transfers can leave the current location empty until retry; the previous bytes remain in history. Unchanged files and manifests are reused. Identical source files with different names remain separate paths. Restore is deliberately manual: download the chosen object and use the manifest to map its relative path and hash back to the source folder.
-
-## Safety and privacy
-
-The default exclusion list omits environment files, private keys, credential-like names, temporary files, development dependency folders, the application state directory, and database sidecar files. Review the list for your own data before the first sync.
-
-Remote manifests contain relative paths, hashes, sizes, and provider object IDs. They do not contain the original absolute Windows source path. Local configuration, history, SQLite index, logs, and encrypted session material stay in the private state directory and are ignored by Git. No telemetry or external analytics are included.
-
-This project does not provide end-to-end encryption. The provider and its signed storage URLs can read uploaded content. Encrypt sensitive files before selecting them if your threat model requires client-side confidentiality.
+Monitoring checks document trees while a foreground service is allowed to run. Android controls job timing, battery and network access; this is not an exact background-time guarantee. See [Android installation, build and test details](docs/android.md). Release checks include compilation, signatures, alignment and simulated adapter/schedule tests; physical phone validation is recorded separately.
 
 ## Development
 
@@ -87,16 +53,16 @@ git clone https://github.com/digiodin1/abre-hamrahi-api.git
 cd abre-hamrahi-api
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install ".[native]"
 $env:PYTHONPATH = 'src'
 python -m unittest discover -s tests -v
+node tests/web_checks.mjs
 ```
 
-The test suite uses an in-memory fake cloud and synthetic temporary folders. It does not require an Abrehamrahi account and never sends test files to the network. See [CONTRIBUTING.md](CONTRIBUTING.md) for the review checklist and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+Python tests use synthetic temporary folders and a fake cloud. UI controller checks use a DOM double, not a visual browser. See [Windows packages](docs/windows-install.md), [automatic sync](docs/automatic-sync.md), [local API](docs/local-api.md), [names and upgrades](docs/names-and-history.md), [contributing](CONTRIBUTING.md) and [security](SECURITY.md).
 
-With Node.js 18 or newer, run `node tests/web_checks.mjs` for dependency-free UI controller checks. They use a minimal DOM double and do not replace a visual browser check. For manual browser QA with 105 synthetic files and a retryable error, run `python tests/ui_fixture.py` with `PYTHONPATH=src` and open the printed loopback URL. This fixture never accesses a real provider account.
+## Privacy and license
 
-## License
+No private profile, account session, signing key, telemetry or analytics is included. The panel binds only to loopback and protects actions with origin/host checks and a process CSRF token. Do not publish its port. The provider can read uploaded content; client-side end-to-end encryption is not provided.
 
-MIT. See [LICENSE](LICENSE).
-
-Windows users can install without Python: see [Windows installer and portable package](docs/windows-install.md).
+Software: [MIT](LICENSE). Third-party fonts have their own terms; see [NOTICE](NOTICE.md).

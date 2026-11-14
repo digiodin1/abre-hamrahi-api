@@ -17,6 +17,7 @@ import javax.crypto.spec.GCMParameterSpec;
 
 public final class Store implements Cloud.Sessions {
     public static final Object SESSION_LOCK = new Object();
+    public static final Object PLAN_LOCK = new Object();
     private final Context context;
     public final SharedPreferences preferences;
 

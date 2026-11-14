@@ -10,5 +10,5 @@ analysis = Analysis([str(root / 'packaging/windows_entry.py')], pathex=[str(root
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name='AbreHamrahiAPI',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
-          console=False, disable_windowed_traceback=True)
+          console=False, disable_windowed_traceback=True, icon=str(root / 'src/hamrahi_backup/web/app.ico'))
 coll = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name='AbreHamrahiAPI')

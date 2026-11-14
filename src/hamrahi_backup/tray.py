@@ -2,6 +2,7 @@
 import ctypes
 from ctypes import wintypes
 import os
+from pathlib import Path
 import threading
 import time
 import webbrowser
@@ -91,6 +92,9 @@ class WindowsTray:
         user.DefWindowProcW.restype = result_type
         user.LoadIconW.argtypes = [pointer, pointer]
         user.LoadIconW.restype = pointer
+        user.LoadImageW.argtypes = [pointer, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user.LoadImageW.restype = pointer
+        user.DestroyIcon.argtypes = [pointer]
         user.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
         user.DestroyWindow.argtypes = [wintypes.HWND]
         user.IsWindow.argtypes = [wintypes.HWND]
@@ -109,8 +113,11 @@ class WindowsTray:
         user.DispatchMessageW.restype = result_type
         callback_message = 0x800B
         taskbar_created = user.RegisterWindowMessageW('TaskbarCreated')
+        branded_icon = user.LoadImageW(None, str(Path(__file__).with_name('web') / 'app.ico'), 1, 0, 0, 0x50)
+        if not branded_icon:
+            raise OSError('Application notification icon could not be loaded')
         icon = IconData(size=ctypes.sizeof(IconData), identifier=1, flags=7, version=3,
-                        message=callback_message, icon=user.LoadIconW(None, pointer(32512)),
+                        message=callback_message, icon=branded_icon,
                         tip='Abre Hamrahi API - click to open')
 
         def window_proc(window, message, first, second):
@@ -153,8 +160,9 @@ class WindowsTray:
         callback = callback_type(window_proc)
         instance = kernel.GetModuleHandleW(None)
         class_name = 'AbreHamrahiAPI.Tray.' + str(os.getpid())
-        window_class = WindowClass(callback=callback, instance=instance, class_name=class_name)
+        window_class = WindowClass(callback=callback, instance=instance, class_name=class_name, icon=branded_icon)
         if not user.RegisterClassW(ctypes.byref(window_class)):
+            user.DestroyIcon(branded_icon)
             raise ctypes.WinError(ctypes.get_last_error())
         try:
             self.window = user.CreateWindowExW(0, class_name, class_name, 0, 0, 0, 0, 0,
@@ -176,3 +184,4 @@ class WindowsTray:
             if self.window and user.IsWindow(self.window):
                 user.DestroyWindow(self.window)
             user.UnregisterClassW(class_name, instance)
+            user.DestroyIcon(branded_icon)

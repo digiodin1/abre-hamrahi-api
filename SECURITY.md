@@ -2,7 +2,7 @@
 
 ## What the API can and cannot reach
 
-The local API binds to IPv4 `127.0.0.1` and rejects any request whose peer is not a loopback address. It serves four fixed panel assets and the JSON panel routes only; it has no arbitrary file-download route, no directory listing, no CORS, and no remote asset loading. The provider receives only files from folders that you explicitly select. It cannot open a connection back into your computer through this API.
+The local API binds to IPv4 `127.0.0.1` and rejects any request whose peer is not a loopback address. It serves fixed bundled panel assets and the JSON panel routes only; it has no arbitrary file-download route, no directory listing, no CORS, and no remote asset loading. The provider receives only files from folders that you explicitly select. It cannot open a connection back into your computer through this API.
 
 A malicious process already running as your Windows user can still inspect or interact with local applications. This tool cannot protect against that threat; keep Windows, browser extensions, and downloaded software trusted.
 

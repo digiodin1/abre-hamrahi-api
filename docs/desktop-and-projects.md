@@ -26,10 +26,9 @@ checkout at its original path or recreate its shortcuts after moving it.
 1. Preserve existing source entries and their IDs. Add the parent as a separate
    source only when it does not overlap an already selected source.
 2. Pause automation while reviewing a new broad source and its exclusions.
-3. Exclude credential stores, session/profile directories, local runtime state,
-   dependency trees, generated builds, test artifacts, and backup output. Ordinary
-   source files can also contain embedded secrets; filename exclusions alone do
-   not detect these. Review configuration and source locally before uploading.
+3. Choose the complete folder scope you want uploaded. Exclusions are optional
+   and are applied only when explicitly configured. The active app state is
+   always protected against recursive writes.
 4. Run preview; inspect eligible file count, byte total and errors. Excluded files
    are intentionally omitted from the backup and cannot be restored from it.
 5. Enable automatic sync and file-change sync, save, and resume. A first backup
@@ -41,11 +40,10 @@ zero-delay mirrored filesystem. After a successful initial pass, ordinary file
 edits are batched into partial runs that read only their affected paths. A change
 arriving during a run remains queued. Renames, deletions, directory events, more
 than 1,000 queued paths, configuration changes, restart and periodic integrity
-checks use full reconciliation. Partial manifests never replace the full index
-or delete unrelated cloud copies. Keep the full manifests as well as partial ones.
+checks use full reconciliation. Partial retries never remove unrelated cloud files. Successful full mirror
+passes send absent paths within the selected folder to native cloud trash.
 
-New installations exclude common private directories and key/session file types.
-Existing exclusion lists are preserved on upgrade; merge additional exclusions
-deliberately. Application private state is always excluded. A transient monitor
+New installations have no implicit content or name exclusions.
+Existing explicit exclusion lists are preserved on upgrade. Application private state is always excluded. A transient monitor
 exception is reported without its private exception detail, then retried while
 the scheduler remains alive. Persistent errors stay visible in Processing.

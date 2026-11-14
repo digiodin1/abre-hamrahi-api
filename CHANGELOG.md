@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0 - 2026-11-14
+
+- Save per-folder instant/daily schedules independently while uploads continue; preserve the running pass and durable daily deadlines.
+- Make guarded local-to-cloud mirror the default: native replacement at the original path, native trash for removals after a successful full scan, no custom history or manifest uploads.
+- Preserve old history and explicit legacy versioned configurations; never permanently delete or empty provider trash.
+- Bundle IRANSansX fonts and application icons; show physical local/cloud folder volumes, file sizes, account quota freshness, process stages, retryable errors and reports.
+- Improve throughput with bounded concurrent files/parts, pooled HTTPS, cached listings and source fingerprints; require fresh finalized metadata before indexing uploads.
+- Update Android with native replacement/trash, independent schedules, local fonts, byte progress, volume/quota gauges, paginated file records and file-specific retry.
+- Verify synthetic live replacement/trash without touching personal content; validate Windows packages and signed Android builds. Physical-phone validation remains outstanding.
+
 ## 1.5.0 - 2026-11-11
 
 - Keep folder selection and preparation available during uploads; preserve save guards around active jobs and continue progress polling while the chooser is open.

@@ -86,7 +86,7 @@ public final class CloudChecks {
         }
         expect(Policy.publicAddress(InetAddress.getByName("8.8.8.8")), "Public IPv4 rejected");
         expect(Policy.publicAddress(InetAddress.getByName("2606:4700:4700::1111")), "Public IPv6 rejected");
-        expect(Policy.excluded(".env") && Policy.excluded("release.jks") && Policy.excluded("session.bin"), "Private defaults missing");
+        expect(!Policy.excluded(".env") && !Policy.excluded("release.jks") && !Policy.excluded("session.bin"), "Selected content must not be silently excluded");
         expect(!Policy.excluded("گزارش.pdf"), "Ordinary document excluded");
     }
 
@@ -119,7 +119,9 @@ public final class CloudChecks {
             Fixture fixture = new Fixture();
             fixture.add("v2/flat/start-upload/", 200, "{\"signed_urls\":[\"https://storage.example.invalid/put\"],\"chunk_size\":1000,\"key\":\"synthetic-key\",\"upload_id\":\"synthetic-upload\"}");
             Reply part = fixture.add("https://storage.example.invalid/put", 200, "");
-            Reply complete = fixture.add("v2/flat/complete-upload/", 200, "{\"id\":21,\"name\":\"اصل.txt\",\"parent\":7,\"size\":" + contents.length + "}");
+            String uploaded = "{\"id\":21,\"name\":\"اصل.txt\",\"parent\":7,\"key\":\"final-key\",\"size\":" + contents.length + "}";
+            Reply complete = fixture.add("v2/flat/complete-upload/", 200, uploaded);
+            fixture.add("v2/flat/get-object/21/", 200, uploaded);
             fixture.add("v2/flat/get-object/21/", 200, "{\"id\":21,\"download_url\":\"https://storage.example.invalid/get\"}");
             Reply download = fixture.addBytes("https://storage.example.invalid/get", 200, contents);
             boolean[] journal = {false};
@@ -132,6 +134,18 @@ public final class CloudChecks {
             expect(part.getRequestProperty("Authorization") == null, "Bearer leaked to signed storage upload");
             expect(download.getRequestProperty("Authorization") == null, "Bearer leaked to signed storage download");
             expect(java.util.Arrays.equals(part.output.toByteArray(), contents), "Transferred bytes differ");
+            Fixture overwrite = new Fixture();
+            JSONObject original = new JSONObject().put("id", 11).put("name", "اصل.txt").put("parent", 7)
+                .put("size", 3).put("key", "previous-key").put("version_group", "synthetic-group");
+            overwrite.add("v2/flat/start-upload/", 200, "{\"signed_urls\":[\"https://storage.example.invalid/put\"],\"chunk_size\":1000,\"key\":\"staging-key\",\"upload_id\":\"synthetic-upload\"}");
+            overwrite.add("https://storage.example.invalid/put", 200, "");
+            overwrite.add("v2/flat/get-object/11/", 200, original.toString());
+            Reply replacement = overwrite.add("v2/flat/complete-upload/", 200, uploaded);
+            overwrite.add("v2/flat/get-object/21/", 200, uploaded);
+            overwrite.cloud().upload(file, "اصل.txt", 7, key -> {}, original);
+            expect(replacement.sent().getBoolean("force_overwrite"), "Indexed replacement must use native overwrite");
+            expect("synthetic-group".equals(replacement.sent().getString("version_group")), "Native version group lost");
+            expect(overwrite.queued.isEmpty(), "Fresh finalized metadata was not checked");
             Fixture corrupt = new Fixture();
             corrupt.add("v2/flat/get-object/21/", 200, "{\"id\":21,\"download_url\":\"https://storage.example.invalid/get\"}");
             corrupt.addBytes("https://storage.example.invalid/get", 200, "corrupt".getBytes("UTF-8"));
@@ -168,8 +182,43 @@ public final class CloudChecks {
         expect(move.called.size() == 3, "Ambiguous move must reconcile without another mutation");
     }
 
+    private static void schedulesAndTrash() throws Exception {
+        long now = System.currentTimeMillis();
+        JSONObject instant = SyncPlan.configure("instant", "02:00", now);
+        JSONObject daily = SyncPlan.configure("daily", "02:00", now);
+        expect(SyncPlan.due(instant, now), "Instant folder was disabled");
+        expect(!SyncPlan.due(daily, now), "Future daily folder ran early");
+        expect(SyncPlan.due(new JSONObject(daily.toString()), daily.getLong("next")), "Persisted overdue folder was skipped");
+        rejected(() -> SyncPlan.configure("daily", "24:00", now));
+        rejected(() -> SyncPlan.configure("unknown", "02:00", now));
+        expect(SyncPlan.ratio(10000, 100) == 1, "Volume ratio uses wrong direction");
+        expect(SyncPlan.ratio(100, 10004) < 1, "Volume ratio exceeds 100");
+        expect(SyncPlan.ratio(0, 0) == 100 && SyncPlan.ratio(1, 0) == 0, "Empty volume rules differ");
+        expect(SyncPlan.percent(99.9999).equals("99.9%"), "Unequal volumes rounded to 100");
+        expect(SyncPlan.bytes(1048576).equals("1.0 MiB"), "Byte units unclear");
+        JSONObject original = new JSONObject().put("id", 12).put("name", "اصل.txt").put("parent", 7).put("key", "key").put("size", 3);
+        Fixture trash = new Fixture();
+        trash.add("v2/flat/get-object/12/", 200, original.toString());
+        Reply deletion = trash.add("v2/rgw/trash-objects/", 500, "{}");
+        trash.add("v2/flat/get-object/12/", 200, new JSONObject(original.toString()).put("is_trash", true).toString());
+        trash.cloud().trash(original);
+        expect("DELETE".equals(deletion.getRequestMethod()), "Wrong soft-trash method");
+        expect(deletion.sent().getJSONArray("obj_ids").getLong(0) == 12, "Wrong trash target");
+        expect(trash.called.size() == 3, "Ambiguous trash mutation was replayed");
+        Fixture changed = new Fixture();
+        changed.add("v2/flat/get-object/12/", 200, new JSONObject(original.toString()).put("size", 4).toString());
+        rejected(() -> changed.cloud().trash(original));
+        expect(changed.called.size() == 1, "Changed cloud file was deleted");
+        Fixture cache = new Fixture();
+        String list = "v2/flat/list-objects/?is_trash=false&recursive=false&limit=1000&offset=0&parent=7";
+        cache.add(list, 200, listing("[" + original + "]"));
+        Cloud cloud = cache.cloud(); cloud.beginSync();
+        cloud.named(7L, "اصل.txt"); cloud.named(7L, "اصل.txt");
+        expect(cache.called.size() == 1, "Per-file listing defeats folder caching");
+    }
+
     public static void main(String[] args) throws Exception {
-        namesAndDestinations(); folders(); transfers(); refreshAndAmbiguousMove();
+        namesAndDestinations(); folders(); transfers(); refreshAndAmbiguousMove(); schedulesAndTrash();
         System.out.println("Android policy and cloud adapter checks passed: " + assertions + " assertions; no real account or network.");
     }
 }

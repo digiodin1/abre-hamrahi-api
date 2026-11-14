@@ -17,7 +17,7 @@ class NamingTests(unittest.TestCase):
         self.source.mkdir()
         self.cloud = FakeCloud()
         self.manager = cb.BackupManager(self.base, self.cloud)
-        self.manager.save_config(self.manager.config | {'settleSeconds': 0,
+        self.manager.save_config(self.manager.config | {'syncBehavior': 'versioned', 'settleSeconds': 0,
                                  'folders': [{'path': str(self.source)}]})
         self.job = self.manager.config['folders'][0]
 
@@ -27,6 +27,16 @@ class NamingTests(unittest.TestCase):
 
     def data(self):
         return [o for o in self.cloud.objects.values() if o.get('key') and not o['name'].startswith('_manifest-')]
+
+    def test_version_lookup_does_not_create_empty_history_for_new_content(self):
+        path = self.source / 'hello.txt'
+        path.write_bytes(b'before')
+        self.manager.sync()
+        path.write_bytes(b'after')
+        self.manager.sync()
+        self.assertTrue(self.manager.state['lastResult']['ok'])
+        digest = hashlib.sha256(b'after').hexdigest()
+        self.assertFalse(any(item['name'] == digest for item in self.cloud.objects.values()))
 
     def test_exact_unicode_long_and_punctuation_names(self):
         names = ['گزارش + #1 [نسخه].txt', 'a' * 170 + '.txt', 'archive.tar.gz']
@@ -115,8 +125,8 @@ class NamingTests(unittest.TestCase):
         root = self.cloud.folder(self.manager.config['remoteRoot'], None, {})
         self.cloud.folder(self.job['name'], root, {})
         self.cloud.folder(self.job['name'] + '-' + self.job['id'], root, {})
-        self.manager.sync()
-        self.assertFalse(self.manager.state['lastResult']['ok'])
+        with self.assertRaises(cb.BackupError):
+            self.manager.sync()
         self.assertEqual(self.data(), [])
 
     def test_identical_files_with_different_names_are_preserved(self):

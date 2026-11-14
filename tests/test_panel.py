@@ -39,6 +39,35 @@ class PanelTests(unittest.TestCase):
             with error:
                 return error.code, error.headers, error.read()
 
+    def test_fonts_are_bundled_and_served_locally_with_font_csp(self):
+        for name in ('iransansx-regular.woff2', 'iransansx-bold.woff2'):
+            with self.subTest(font=name):
+                status, headers, body = self.request('/' + name)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers['Content-Type'], 'font/woff2')
+                self.assertEqual(body[:4], b'wOF2')
+                self.assertIn("font-src 'self'", headers['Content-Security-Policy'])
+        status, headers, body = self.request('/fonts.css')
+        self.assertEqual(status, 200)
+        self.assertIn(b'IRANSansX', body)
+        self.assertNotIn(b'https://', body)
+
+    def test_folder_schedule_endpoint_saves_during_upload_and_rejects_cross_site(self):
+        source = Path(self.temp.name) / 'source'
+        source.mkdir()
+        self.engine.save_config(self.engine.config | {'folders': [{'path': str(source)}]})
+        identifier = self.engine.config['folders'][0]['id']
+        payload = json.dumps({'job': identifier, 'syncMode': 'daily', 'dailyTime': '05:25'}).encode()
+        endpoint = '/api/backup/folder-schedule'
+        self.engine.state['busy'] = True
+        with self.engine.work_lock:
+            self.assertEqual(self.post(payload, {}, endpoint)[0], 403)
+            status, _, response = self.post(payload, path=endpoint)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(response)['saved'])
+        self.assertTrue(self.engine.state['busy'])
+        self.assertEqual(self.engine.config['folders'][0]['syncMode'], 'daily')
+
     def post(self, data, headers=None, path='/api/backup/config'):
         if headers is None:
             headers = {
@@ -154,9 +183,18 @@ class PanelTests(unittest.TestCase):
         self.engine.save_config(self.engine.config | {'settleSeconds': 0,
                                       'folders': [{'path': str(source)}]})
         entered, release = threading.Event(), threading.Event()
+        committed = threading.Event()
+        update = self.engine.update
+        def observe(**values):
+            update(**values)
+            if values.get('uploaded') == 1:
+                committed.set()
+        self.engine.update = observe
         snapshot = self.engine.snapshot
         def staged(path, target):
-            if path.name == 'b.txt':
+            if path.name != 'a.txt':
+                if not committed.wait(5):
+                    raise RuntimeError('first file was not committed')
                 entered.set()
                 if not release.wait(5):
                     raise RuntimeError('test worker was not released')

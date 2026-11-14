@@ -46,13 +46,15 @@ public final class SyncService extends Service {
 
     private Notification notification() {
         int total = store.preferences.getInt("total", 0), done = store.preferences.getInt("done", 0);
+        long totalBytes = store.preferences.getLong("totalBytes", 0), doneBytes = store.preferences.getLong("doneBytes", 0);
+        int percent = totalBytes <= 0 ? 0 : (int)Math.min(100, 100.0 * doneBytes / totalBytes);
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, SyncService.class).setAction("stop"), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, "backup")
             .setSmallIcon(R.drawable.cloud).setContentTitle("Abre Hamrahi API")
-            .setContentText(Backup.RUNNING.get() ? "در حال بررسی: " + done + " از " + total + " فایل" : "پایش تغییرات پوشه‌های انتخاب‌شده")
+            .setContentText(Backup.RUNNING.get() ? SyncPlan.bytes(doneBytes) + " / " + SyncPlan.bytes(totalBytes) + " · " + percent + "٪" : "پایش تغییرات پوشه‌های انتخاب‌شده")
             .setContentIntent(open).setOngoing(true).setVisibility(Notification.VISIBILITY_PRIVATE)
-            .setProgress(total, done, total == 0 && Backup.RUNNING.get())
+            .setProgress(100, percent, total == 0 && Backup.RUNNING.get())
             .addAction(new Notification.Action.Builder(null, "توقف", stop).build()).build();
     }
 
@@ -81,12 +83,13 @@ public final class SyncService extends Service {
         }
         startForeground(1, notification());
         if (intent != null && "once".equals(intent.getAction())) {
+            String retryPath = intent.getStringExtra("retryPath");
             if (executor == null) {
                 executor = Executors.newSingleThreadScheduledExecutor();
                 handler.post(refreshNotification);
             }
             executor.submit(() -> {
-                try { if (networkAllowed(this, store)) backup.run(false); }
+                try { if (networkAllowed(this, store)) backup.run(false, false, retryPath); }
                 finally { if (!monitoring) stopSelf(startId); }
             });
             return START_NOT_STICKY;
@@ -100,7 +103,7 @@ public final class SyncService extends Service {
             store.preferences.edit().putBoolean("automatic", true).apply();
             schedule(this, true);
             executor.scheduleWithFixedDelay(() -> {
-                if (networkAllowed(this, store)) backup.run(false);
+                if (networkAllowed(this, store)) backup.run(false, true);
             }, 0, 30, TimeUnit.SECONDS);
         }
         return START_NOT_STICKY;

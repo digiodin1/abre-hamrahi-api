@@ -30,6 +30,7 @@ def main():
         str(root / 'packaging' / 'AbreHamrahiAPI.spec')], cwd=root, check=True)
     notices = out / 'AbreHamrahiAPI' / 'licenses'
     notices.mkdir(exist_ok=True)
+    shutil.copyfile(root / 'NOTICE.md', notices / 'Project-NOTICE.md')
     shutil.copyfile(Path(sys.base_prefix) / 'LICENSE.txt', notices / 'Python-LICENSE.txt')
     shutil.copyfile(Path(sys.base_prefix) / 'tcl/tk8.6/license.terms', notices / 'Tk-license.terms')
     for package in ('pyinstaller', 'watchdog'):

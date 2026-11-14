@@ -17,7 +17,7 @@ def main():
     suffix = '.exe' if os.name == 'nt' else ''
     subprocess.run([str(args.jdk / ('bin/javac' + suffix)), '-encoding', 'UTF-8', '--release', '8',
         '-classpath', str(args.json_jar), '-d', str(classes),
-        *[str(source / (name + '.java')) for name in ('UserError', 'Policy', 'Cloud')],
+        *[str(source / (name + '.java')) for name in ('UserError', 'Policy', 'Cloud', 'SyncPlan')],
         str(root / 'android/tests/CloudChecks.java')], check=True)
     subprocess.run([str(args.jdk / ('bin/java' + suffix)), '-cp', os.pathsep.join([str(classes), str(args.json_jar)]),
         'ir.abrehamrahi.backup.community.CloudChecks'], check=True)

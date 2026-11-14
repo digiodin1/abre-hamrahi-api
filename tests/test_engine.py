@@ -22,6 +22,8 @@ class FakeCloud:
         self.tokens = {'access': 'test-access', 'refresh': 'test-refresh'}
         self.session_error = None
         self.objects = {}
+        self.native_versions = {}
+        self.trashed = {}
         self.next_id = 1
         self.uploads = 0
         self.verifications = 0
@@ -29,6 +31,9 @@ class FakeCloud:
 
     def connection(self):
         return {'checkedAt': cb.now(), 'used': 0, 'total': 100000000}
+
+    def quota(self, refresh=True):
+        return self.connection()
 
     def list_folder(self, parent=None):
         return [dict(x) for x in self.objects.values() if x['parent'] == parent]
@@ -43,8 +48,12 @@ class FakeCloud:
         return number
 
     def upload(self, path, name, parent, progress=lambda x: None, **kwargs):
-        if any(x['name'] == name for x in self.list_folder(parent)):
-            raise cb.BackupError('synthetic conflict', 409)
+        existing = next((item for item in self.list_folder(parent) if item['name'] == name), None)
+        if existing:
+            replacement = kwargs.get('replace')
+            if not replacement or replacement['id'] != existing['id']:
+                raise cb.BackupError('synthetic conflict', 409)
+            self.native_versions[existing['id']] = self.objects.pop(existing['id'])
         self.uploads += 1
         number = self.next_id
         self.next_id += 1
@@ -52,6 +61,13 @@ class FakeCloud:
         obj = {'id': number, 'name': name, 'parent': parent, 'size': len(data), 'key': 'object', 'data': data}
         self.objects[number] = obj
         return obj
+
+    def trash(self, expected):
+        observed = self.objects[expected['id']]
+        if observed != expected:
+            raise cb.BackupError('synthetic changed target', 409)
+        self.trashed[expected['id']] = self.objects.pop(expected['id']) | {'is_trash': True}
+        return self.trashed[expected['id']]
 
     def rename(self, object_id, name):
         obj = self.objects[object_id]
@@ -100,7 +116,7 @@ class EngineTests(unittest.TestCase):
         self.fake = FakeCloud()
         self.engine = cb.BackupManager(self.base, self.fake)
         config = self.engine.public()['config']
-        config.update(settleSeconds=0, folders=[{'path': str(self.source), 'name': 'Documents'}])
+        config.update(syncBehavior='versioned', settleSeconds=0, exclude=['.env', '*.pem', 'node_modules'], folders=[{'path': str(self.source), 'name': 'Documents'}])
         self.engine.save_config(config)
 
     def tearDown(self):
@@ -193,14 +209,15 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(self.engine.state['lastResult']['ok'])
         self.assertTrue(self.engine.state['lastResult']['errors'])
 
-    def test_limits_recent_files_and_live_sql_server_are_reported(self):
+    def test_limits_and_recent_files_are_reported_without_file_type_bans(self):
         (self.source / 'live.mdf').write_bytes(b'database')
         config = self.engine.public()['config']
         config['maxFileMiB'] = 1
         self.engine.save_config(config)
         (self.source / 'large.bin').write_bytes(b'x' * (1048576 + 1))
         self.engine.sync(preview=True)
-        self.assertEqual(len(self.engine.state['lastResult']['errors']), 2)
+        self.assertEqual(len(self.engine.state['lastResult']['errors']), 1)
+        self.assertEqual(self.engine.state['lastResult']['files'], 1)
         (self.source / 'live.mdf').unlink()
         (self.source / 'large.bin').unlink()
         (self.source / 'new.txt').write_text('recent')
@@ -272,8 +289,9 @@ class ClientTests(unittest.TestCase):
         def api(method, endpoint, payload=None, **kwargs):
             if endpoint.endswith('start-upload/'):
                 return {'signed_urls': ['https://storage.example/a', 'https://storage.example/b'], 'chunk_size': 6, 'key': 'k', 'upload_id': 'u'}
-            complete.append(payload)
-            return {'id': 1, 'size': 10, 'name': 'test.txt', 'parent': 7}
+            if method == 'POST':
+                complete.append(payload)
+            return {'id': 1, 'size': 10, 'name': 'test.txt', 'parent': 7, 'key': 'k'}
         def opened(request, timeout):
             self.assertNotIn('Authorization', request.headers)
             calls.append(b''.join(request.data))
@@ -282,7 +300,7 @@ class ClientTests(unittest.TestCase):
         self.client.opener.open = opened
         with patch.object(cb, 'check_transfer_url'):
             self.client.upload(path, 'test.txt', 7)
-        self.assertEqual(calls, [b'abcdef', b'ghij'])
+        self.assertCountEqual(calls, [b'abcdef', b'ghij'])
         self.assertEqual([p['size'] for p in complete[0]['parts']], [6, 4])
         self.assertFalse(complete[0]['force_overwrite'])
 
@@ -297,6 +315,32 @@ class ClientTests(unittest.TestCase):
         self.client.opener.open = lambda *a, **k: Response()
         with patch.object(cb, 'check_transfer_url'), self.assertRaises(cb.BackupError):
             self.client.upload(path, 'x', None)
+
+    def test_multipart_parallelism_preserves_order_and_monotonic_progress(self):
+        path = self.base / 'parts.bin'
+        path.write_bytes(b'abcdefgh')
+        barrier = threading.Barrier(4)
+        complete, progress = [], []
+        def api(method, endpoint, payload=None, **kwargs):
+            if endpoint.endswith('start-upload/'):
+                return {'signed_urls': [f'https://storage.example/{number}' for number in range(4)],
+                        'chunk_size': 2, 'key': 'k', 'upload_id': 'u'}
+            if method == 'POST':
+                complete.append(payload)
+            return {'id': 1, 'size': 8, 'name': 'parts.bin', 'parent': 7, 'key': 'k'}
+        def opened(request, timeout):
+            number = int(request.full_url.rsplit('/', 1)[1])
+            self.assertEqual(b''.join(request.data), b'abcdefgh'[number*2:number*2+2])
+            barrier.wait(3)
+            return Response(headers={'ETag': f'receipt-{number}'})
+        self.client._json = api
+        self.client.opener.open = opened
+        with patch.object(cb, 'check_transfer_url'):
+            self.client.upload(path, 'parts.bin', 7, progress=progress.append)
+        self.assertEqual([part['PartNumber'] for part in complete[0]['parts']], [1, 2, 3, 4])
+        self.assertEqual([part['ETag'] for part in complete[0]['parts']], [f'receipt-{number}' for number in range(4)])
+        self.assertEqual(progress, sorted(progress))
+        self.assertEqual(progress[-1], 8)
 
     def test_download_corruption_and_oversize_rejected(self):
         self.client._json = lambda *a, **k: {'download_url': 'https://storage.example/data'}

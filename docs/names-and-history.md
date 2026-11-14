@@ -1,70 +1,27 @@
-# Names, history, and duplicate files
+# Names, replacement and trash
 
-The visible backup tree uses the original file and directory names, without
-sanitizing, truncating, or appending a content hash. If the provider rejects or
-changes a name, the operation fails visibly. Upload completion must confirm both
-the exact name and parent directory.
+The selected tree uses original file and directory names without hash suffixes or aliases. Completion verifies the exact name and destination. Duplicate destination names stop the operation.
 
-An unchanged file is verified and reused. When an indexed file changes, its old
-bytes are downloaded and SHA-256 checked before the existing object is moved to:
+## Mirror behavior in 1.7
 
-```
-<cloud root>/_abre-backup-data/history/<job id>/<SHA-256 of relative path>/<SHA-256 of content>/<original filename>
-```
+The default `syncBehavior: "mirror"` replaces an indexed changed file using the provider's native overwrite and version group, preserving one current visible path. Unchanged files are not uploaded again. No custom history or remote manifest is created in this mode. Provider-managed internal versions may still exist.
 
-Then the new content is uploaded under its original name in the visible tree.
-There is no overwrite or delete request. A transfer failure can leave the visible
-location temporarily empty, but its predecessor remains in history. Retry
-reconciles the actual cloud state. Reverting to an archived version reuses that
-object instead of uploading another copy. Unindexed, conflicting, or corrupted
-objects stop the operation and require review. `_abre-backup-data` is reserved
-as a source folder name under a cloud root.
+After a complete, successful folder pass, cloud-only entries within that selected folder are sent to native trash. A missing/unreadable source, scan failure, failed transfer, changed source root, protected exclusion or partial retry prevents unsafe deletion. Every trash request checks the current target metadata and reads back the result. An ambiguous response is reconciled without repeating the mutation. The client never calls permanent deletion or empties trash. Restore and provider retention are managed in the cloud interface.
 
-Manifests are stored separately under `_abre-backup-data/manifests/<job id>`.
-Their names contain the full hash of their canonical contents. An unchanged
-manifest is reused; a timer alone does not generate a new manifest. The local
-Reports page still records every run and its time. A previous manifest's object
-IDs continue to identify versions moved into history; relative paths and hashes
-allow manual restore without guessing from a filename. Keep these manifests.
+This mirrors local changes toward the cloud. Remote-to-local downloads and bidirectional conflict resolution are not implemented.
 
-## Upgrading the old layout
+## Upgrading
 
-Stop the old application before running the new version. Preserve its private
-state directory and SQLite index. Do not run old and new releases against the
-same account and source at the same time.
+Preserve the private state directory and SQLite index. Do not run releases concurrently against the same source/account profile.
 
-The next sync recognizes old `<source name>-<job id>` directories and the old
-sanitized, hash-suffixed nested directories. When the new name is free, it
-renames the existing directory in place. A file with the old hash-suffixed name
-is renamed only when its ID is recorded in the local index and its full hash
-and size have been verified. File object IDs and contents are preserved, so
-unchanged data need not be uploaded again. Preview performs no cloud mutation.
+Old indexed hash-suffixed names are migrated in place only after verification. Conflicting old/new folders stop migration. Existing custom history and manifests under `_abre-backup-data` or Android's `_abre-android-data` are left intact. The update does not perform account-wide historical cleanup.
 
-If both old and new folders already exist, migration stops instead of merging
-them. If the local index is missing or the configured cloud root has changed,
-automatic reconciliation cannot prove ownership of old objects. Restore the
-original state or review the trees manually before syncing. Unknown historical
-files and manifests are left intact. This is not an account-wide duplicate
-cleaner and does not remove copies produced by older releases.
+For compatibility, an explicitly configured `syncBehavior: "versioned"` keeps the former archive/manifest behavior. The panel saves mirror mode. The compatibility setting is not a second visible sync option.
 
-## What counts as a duplicate?
+## Conflicts and uncertain uploads
 
-Two different source paths, such as `report.txt` and `report - Copy.txt`, remain
-two files in the backup even when their bytes match. Removing either cloud file
-would break the exact source tree. Different content hashes represent versions,
-not duplicates. Similar names, equal sizes, or a short hash prefix alone do not
-prove equality.
+Unindexed files can be adopted only after a complete content hash verification against the local snapshot. Different or unverifiable remote content is a visible conflict. Finalized storage keys can differ from provisional upload keys; recovery uses the actual finalized object and content evidence.
 
-For existing duplicates, first record each original path and object ID, download
-the candidates, and compare complete SHA-256 hashes. Preserve one verified
-recoverable copy and its path mappings before proposing any cleanup. Review
-changes in the source folder separately; excluding or removing a source copy
-does not authorize deletion of its cloud history. This client never automatically
-deletes cloud data.
+Two local files with different names remain two cloud paths even if their bytes match. Equal sizes alone do not establish duplicate content.
 
-The adapter's rename and move payloads follow the provider's public web frontend
-observed on November 5, 2026. That frontend is not a stable public integration
-contract. Each mutation is read back and checked for the same object ID, content
-key, size, and unaffected location/name. An ambiguous response is reconciled
-with reads and is never blindly replayed. Changing provider behavior can still
-require an adapter update.
+The adapter follows observed provider web requests and validates response shapes. Provider behavior changes may require an adapter update; malformed responses fail visibly instead of silently changing names or permanently deleting objects.

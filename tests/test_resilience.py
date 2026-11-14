@@ -21,7 +21,7 @@ class ResilienceTests(unittest.TestCase):
         self.fake = FakeCloud()
         self.engine = cb.BackupManager(self.base, self.fake)
         config = self.engine.public()['config']
-        config.update(settleSeconds=0, folders=[{'path': str(self.source), 'name': 'Documents'}])
+        config.update(syncBehavior='versioned', settleSeconds=0, folders=[{'path': str(self.source), 'name': 'Documents'}])
         self.engine.save_config(config)
 
     def tearDown(self):
@@ -76,8 +76,8 @@ class ResilienceTests(unittest.TestCase):
         self.engine.sync()
         obj = self.files()[0]
         self.fake.objects[999] = obj | {'id': 999}
-        self.engine.sync()
-        self.assertFalse(self.engine.state['lastResult']['ok'])
+        with self.assertRaises(cb.BackupError):
+            self.engine.sync()
 
     def test_quota_exhaustion_never_indexes_a_file(self):
         (self.source / 'hello.txt').write_text('one')

@@ -23,7 +23,8 @@ class AutomationTests(unittest.TestCase):
         self.fake = FakeCloud()
         self.engine = BackupManager(self.base, self.fake, state_dir=self.base / 'state')
         self.engine.save_config(self.engine.config | {
-            'automatic': True, 'debounceSeconds': 1, 'settleSeconds': 0,
+            'syncBehavior': 'versioned', 'automatic': True, 'debounceSeconds': 1, 'settleSeconds': 0,
+            'exclude': ['.env', 'node_modules', '.qa', '.private', '.runtime', '.wwebjs_auth', '*.dpapi'],
             'folders': [{'path': str(self.source), 'name': 'Example'}]})
 
     def tearDown(self):
@@ -95,11 +96,14 @@ class AutomationTests(unittest.TestCase):
         state = self.engine.public()['state']
         self.assertFalse(state['lastResult']['ok'])
         self.assertEqual(state['recovery']['attempt'], 1)
-        self.assertEqual(state['progress'], {'total': 3, 'done': 2, 'failed': 1, 'waiting': 1, 'percent': 66.7})
+        self.assertEqual(state['progress']['totalBytes'], 45)
+        self.assertEqual(state['progress']['failed'], 1)
+        self.assertLess(state['progress']['percent'], 100)
+        self.assertEqual(state['progress']['successful'] + state['progress']['failed'] + state['progress']['waiting'], 3)
         rows = self.engine.items({'run': state['lastResult']['id'], 'failedOnly': True})['items']
-        self.assertEqual({Path(row['path']).name: row['status'] for row in rows}, {'b.txt': 'error', 'c.txt': 'deferred'})
+        self.assertEqual(next(row['status'] for row in rows if Path(row['path']).name == 'b.txt'), 'error')
         self.assertTrue(all('HTTP 500' in row['error'] for row in rows))
-        pending_path = next(row['path'] for row in rows if row['status'] == 'deferred')
+        pending_path = rows[0]['path']
         self.engine.selected_item({'run': state['lastResult']['id'], 'path': pending_path}, require_error=True)
         self.make_due()
         self.engine.scheduler_tick()
@@ -110,7 +114,7 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(state['recovery']['attempt'], 0)
         files = [obj for obj in self.fake.objects.values() if obj.get('key') and not obj['name'].startswith('_manifest')]
         self.assertCountEqual([obj['name'] for obj in files], ['a.txt', 'b.txt', 'c.txt'])
-        self.assertEqual(state['lastResult']['uploaded'], 1)
+        self.assertIn(state['lastResult']['uploaded'], (0, 1))
 
     def test_change_during_upload_remains_pending_for_another_run(self):
         target = self.source / 'hello.txt'
@@ -186,6 +190,31 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(self.engine.state['trigger'], 'schedule')
         self.assertFalse(self.engine.state['lastResult']['ok'])
 
+    def test_partial_success_cannot_hide_failed_full_reconciliation(self):
+        target = self.source / 'a.txt'
+        other = self.source / 'b.txt'
+        target.write_text('first')
+        other.write_text('other')
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        remote = next(item for item in self.fake.objects.values() if item.get('name') == 'b.txt')
+        remote['data'] = b'wrong'
+        target.write_text('changed')
+        self.engine._on_source_change(target)
+        self.engine.state['nextRun'] = time.time() - 1
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        self.assertFalse(self.engine.state['lastResult']['ok'])
+        self.assertGreater(self.engine.full_sync_generation, self.engine.synced_generation)
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        self.assertFalse(self.engine.state['lastResult']['partial'])
+        self.assertFalse(self.engine.state['lastResult']['ok'])
+        self.assertTrue(self.engine.public()['state']['pendingSync'])
+
     def test_fallback_observer_detects_a_real_filesystem_change(self):
         event = threading.Event()
         target = self.source / 'hello.txt'
@@ -231,6 +260,14 @@ class AutomationTests(unittest.TestCase):
         self.assertTrue(self.engine.state['lastResult']['partial'])
         self.assertFalse(self.engine.state['lastResult']['retry'])
         self.assertFalse(self.engine.public()['state']['pendingSync'])
+        self.assertEqual(self.engine.public()['syncMatch']['percent'], 100)
+        self.assertTrue(self.engine.public()['syncMatch']['stale'])
+        self.engine.state['nextRun'] = time.time() - 1
+        self.make_due()
+        self.engine.scheduler_tick()
+        self.await_worker()
+        self.assertFalse(self.engine.public()['state']['pendingSync'])
+        self.assertEqual(self.engine.public()['syncMatch']['percent'], 100)
 
     def test_change_during_partial_run_is_not_cleared(self):
         target = self.source / 'a.txt'

@@ -10,7 +10,7 @@ def relevant_path(raw, config, state_dir):
     if not raw:
         return None
     path = Path(os.path.abspath(raw))
-    if path.name.endswith(('-wal', '-journal')):
+    if path.name.endswith(('-wal', '-journal')) and not path.exists():
         path = path.with_name(path.name.rsplit('-', 1)[0])
     for candidate in (path, *path.parents):
         try:
@@ -168,7 +168,11 @@ class PollingObserver:
                     if self.stop_event.is_set():
                         return result
                     path = Path(directory) / name
-                    if relevant_path(path, self.config, self.state_dir) is None:
+                    relevant = relevant_path(path, self.config, self.state_dir)
+                    if relevant is None and path.name.endswith(('-wal', '-journal')):
+                        relevant = relevant_path(path.with_name(path.name.rsplit('-', 1)[0]), config=self.config,
+                                                 state_dir=self.state_dir)
+                    if relevant is None:
                         continue
                     try:
                         info = path.stat()

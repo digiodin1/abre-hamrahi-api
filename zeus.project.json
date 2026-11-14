@@ -2,7 +2,7 @@
   "name": "abre-hamrahi-api",
   "owner": "internal",
   "kind": "local-backup-panel",
-  "description": "Installable Windows backup application with notification area controls and a native Android companion; verified version history, selected-folder sync and recovery",
+  "description": "Windows folder sync with independent instant or daily folder schedules, bundled IRANSansX UI, native replacement and guarded provider trash, bounded parallel transfers, pooled HTTPS, live account quota, cloud/local volume totals, resumable file queue, tray controls and quiet startup",
   "entrypoints": [
     "src/hamrahi_backup/cli.py",
     "src/hamrahi_backup/server.py",

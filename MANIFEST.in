@@ -1,7 +1,7 @@
-include README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE zeus.project.json
+include README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE NOTICE.md zeus.project.json
 recursive-include docs *.md
 recursive-include packaging *.py *.spec *.iss *.txt
-recursive-include android *.py *.java *.xml
+recursive-include android *.py *.java *.xml *.ttf
 recursive-include tests *.py *.mjs
 prune .qa
 prune build

@@ -12,12 +12,17 @@ from . import __version__
 
 MAX_BODY = 64 * 1024
 ASSETS = {
+    '/app.svg': ('app.svg', 'image/svg+xml'),
+    '/favicon.ico': ('app.ico', 'image/x-icon'),
     '/': ('backup.html', 'text/html; charset=utf-8'),
     '/backup': ('backup.html', 'text/html; charset=utf-8'),
     '/backup.js': ('backup.js', 'text/javascript; charset=utf-8'),
     '/backup.css': ('backup.css', 'text/css; charset=utf-8'),
+    '/fonts.css': ('fonts.css', 'text/css; charset=utf-8'),
+    '/iransansx-regular.woff2': ('iransansx-regular.woff2', 'font/woff2'),
+    '/iransansx-bold.woff2': ('iransansx-bold.woff2', 'font/woff2'),
 }
-CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+CSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 
 
 class PanelServer(ThreadingHTTPServer):

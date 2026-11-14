@@ -47,7 +47,7 @@ def main():
 
     run([tools / ('aapt2' + suffix), 'compile', '--dir', source / 'res', '-o', build / 'resources.zip'])
     run([tools / ('aapt2' + suffix), 'link', '-I', platform, '--manifest', source / 'AndroidManifest.xml',
-         '--java', build / 'generated', '-o', build / 'unsigned.apk', build / 'resources.zip'])
+         '--java', build / 'generated', '-A', source / 'assets', '-o', build / 'unsigned.apk', build / 'resources.zip'])
     java_files = sorted((source / 'src').rglob('*.java')) + sorted((build / 'generated').rglob('*.java'))
     run([jdk / ('bin/javac' + suffix), '-encoding', 'UTF-8', '-source', '8', '-target', '8',
          '-g:none', '-classpath', platform, '-d', build / 'classes', *java_files])
@@ -60,6 +60,7 @@ def main():
     with zipfile.ZipFile(build / 'unsigned.apk', 'a', zipfile.ZIP_DEFLATED) as archive:
         for path in sorted((build / 'dex').glob('classes*.dex')):
             archive.write(path, path.name)
+        archive.write(source.parent / 'NOTICE.md', 'assets/NOTICE.md')
     run([tools / ('zipalign' + suffix), '-f', '-p', '4', build / 'unsigned.apk', build / 'aligned.apk'])
     if not key.exists():
         key.parent.mkdir(parents=True, exist_ok=True)

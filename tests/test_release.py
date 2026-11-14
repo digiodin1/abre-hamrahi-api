@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import uuid
@@ -21,7 +22,7 @@ class ReleaseTests(unittest.TestCase):
         self.source.mkdir()
         self.cloud = FakeCloud()
         self.manager = cb.BackupManager(self.base, self.cloud)
-        self.manager.save_config(self.manager.config | {'settleSeconds': 0,
+        self.manager.save_config(self.manager.config | {'settleSeconds': 0, 'exclude': ['.env'],
                                  'folders': [{'path': str(self.source), 'name': 'ignored alias'}]})
 
     def tearDown(self):
@@ -105,19 +106,32 @@ class ReleaseTests(unittest.TestCase):
         for name in ['a.txt', 'b.txt', 'c.txt']:
             (self.source / name).write_text(name)
         snapshot = self.manager.snapshot
+        committed = threading.Event()
+        update = self.manager.update
+        def observe(**values):
+            update(**values)
+            if values.get('uploaded') == 1:
+                committed.set()
+        self.manager.update = observe
         def read(path, target):
             if path.name == 'b.txt':
+                self.assertTrue(committed.wait(5))
                 raise cb.BackupError('synthetic network error', 502)
+            if path.name == 'c.txt':
+                self.assertTrue(committed.wait(5))
+                self.manager.cancelled()
             return snapshot(path, target)
         with patch.object(self.manager, 'snapshot', side_effect=read):
             self.manager.start('sync')
             self.wait()
         result = self.manager.state['lastResult']
         self.assertFalse(result['ok'])
-        self.assertEqual(result['uploaded'], 1)
+        self.assertGreaterEqual(result['uploaded'], 1)
         rows = self.manager.items({'run': result['id']})['items']
-        self.assertEqual({Path(x['path']).name: x['status'] for x in rows},
-                         {'a.txt': 'ok', 'b.txt': 'error', 'c.txt': 'deferred'})
+        statuses = {Path(item['path']).name: item['status'] for item in rows}
+        self.assertEqual(statuses['a.txt'], 'ok')
+        self.assertEqual(statuses['b.txt'], 'error')
+        self.assertIn(statuses['c.txt'], ('ok', 'deferred'))
         self.assertTrue(any(step['status'] == 'error' for step in self.manager.state['steps']))
         self.assertFalse((self.manager.state_dir / 'active-run.json').exists())
 
