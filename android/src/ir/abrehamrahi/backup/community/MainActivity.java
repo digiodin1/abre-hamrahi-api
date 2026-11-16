@@ -7,7 +7,9 @@ import android.app.TimePickerDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -45,6 +47,22 @@ public final class MainActivity extends Activity {
     private GaugeView capacityGauge, volumeGauge;
 
     private interface Task { String run() throws Exception; }
+
+    private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + 0.5f); }
+
+    private GradientDrawable surface(int color, int radius) {
+        GradientDrawable shape = new GradientDrawable(); shape.setColor(color); shape.setCornerRadius(dp(radius));
+        shape.setStroke(dp(1), Color.argb(24, 20, 65, 95)); return shape;
+    }
+
+    private void styleButton(Button button, boolean primary) {
+        button.setAllCaps(false); button.setTextSize(14); button.setMinHeight(dp(48));
+        button.setTypeface(primary ? bold : regular); button.setTextColor(primary ? Color.WHITE : Color.rgb(22, 76, 112));
+        button.setBackground(surface(primary ? Color.rgb(0, 145, 185) : Color.WHITE, 14));
+        button.setPadding(dp(14), dp(8), dp(14), dp(8));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.setMargins(0, dp(5), 0, dp(5));
+        button.setLayoutParams(params);
+    }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -133,6 +151,8 @@ public final class MainActivity extends Activity {
         view.setHint(hint);
         view.setTypeface(regular);
         view.setInputType(type);
+        view.setTextSize(15); view.setPadding(dp(14), dp(10), dp(14), dp(10));
+        view.setBackground(surface(Color.WHITE, 12));
         view.setSaveEnabled(false);
         view.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         content.addView(view);
@@ -144,6 +164,7 @@ public final class MainActivity extends Activity {
         button.setText(title);
         button.setTypeface(regular);
         button.setOnClickListener(view -> action.run());
+        styleButton(button, title.contains("سینک") || title.contains("ورود") || title.contains("ذخیره") || title.contains("انتخاب"));
         content.addView(button);
         return button;
     }
@@ -174,10 +195,12 @@ public final class MainActivity extends Activity {
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
         screen.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        screen.setBackgroundColor(Color.rgb(246, 249, 252));
         TextView title = new TextView(this);
-        title.setText("Abre Hamrahi API · 1.7.3");
+        title.setText("Abre Hamrahi API · 1.7.4");
         title.setTypeface(bold);
-        title.setTextSize(22); title.setPadding(16, 32, 16, 16);
+        title.setTextColor(Color.WHITE); title.setTextSize(21); title.setPadding(dp(20), dp(24), dp(20), dp(18));
+        title.setBackground(surface(Color.rgb(16, 92, 137), 0));
         screen.addView(title);
         ScrollView navigation = new ScrollView(this);
         LinearLayout tabs = new LinearLayout(this);
@@ -189,10 +212,12 @@ public final class MainActivity extends Activity {
             Button tab = new Button(this);
             tab.setText(names[index]); tab.setTextSize(12); tab.setAllCaps(false);
             tab.setTypeface(regular);
-            tab.setEnabled(!key.equals(selected));
+            tab.setEnabled(!key.equals(selected)); tab.setTextColor(key.equals(selected) ? Color.WHITE : Color.rgb(28, 83, 116));
+            tab.setBackground(surface(key.equals(selected) ? Color.rgb(0, 145, 185) : Color.WHITE, 12));
             tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setPadding(0, 0, 0, 0);
             tab.setOnClickListener(view -> show(key));
-            tabs.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
+            LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, dp(48), 1); tabParams.setMargins(dp(4), dp(8), dp(4), dp(8));
+            tabs.addView(tab, tabParams);
         }
         screen.addView(tabs);
         content = new LinearLayout(this);
@@ -212,12 +237,16 @@ public final class MainActivity extends Activity {
         } else {
             capacityGauge = new GaugeView(this, regular, "فضای باقی‌ماندهٔ ابر");
             volumeGauge = new GaugeView(this, regular, "تطابق حجم ابر و محلی");
-            content.addView(capacityGauge);
+            LinearLayout gauges = new LinearLayout(this); gauges.setOrientation(LinearLayout.HORIZONTAL); gauges.setWeightSum(2);
+            gauges.setBackground(surface(Color.WHITE, 18)); gauges.setPadding(dp(4), dp(6), dp(4), dp(6));
+            gauges.addView(capacityGauge, new LinearLayout.LayoutParams(0, dp(220), 1));
+            gauges.addView(volumeGauge, new LinearLayout.LayoutParams(0, dp(220), 1));
+            content.addView(gauges);
             quotaDetail = text("");
-            content.addView(volumeGauge);
             status = text(store.preferences.getString("status", "آماده"));
+            status.setTypeface(bold); status.setTextColor(Color.rgb(22, 76, 112)); status.setBackground(surface(Color.WHITE, 14));
             progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-            progress.setMax(100); content.addView(progress);
+            progress.setMax(100); progress.setPadding(0, dp(12), 0, dp(8)); content.addView(progress);
             counts = text(""); current = text("");
             button("فایل‌ها و خطاها", () -> files(0));
             button("پیش‌نمایش محلی", () -> start(true));
@@ -327,11 +356,15 @@ public final class MainActivity extends Activity {
                 JSONObject plan = new JSONObject(store.preferences.getString("folderPlans", "{}")).optJSONObject(value);
                 String mode = plan == null ? "instant" : plan.optString("mode", "instant");
                 String time = plan == null ? "02:00" : plan.optString("time", "02:00");
-                button(("instant".equals(mode) ? "✓ " : "") + "سینک آنی", () -> savePlan(value, "instant", time));
-                button(("daily".equals(mode) ? "✓ " : "") + "سینک روزانه · " + time, () ->
-                    new TimePickerDialog(this, (picker, hour, minute) -> savePlan(value, "daily",
-                        String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minute)),
-                        Integer.parseInt(time.substring(0, 2)), Integer.parseInt(time.substring(3)), true).show());
+                String end = plan == null ? "23:59" : plan.optString("end", "23:59");
+                button(("instant".equals(mode) ? "✓ " : "") + "سینک آنی", () -> savePlan(value, "instant", time, end));
+                button(("daily".equals(mode) ? "✓ " : "") + "سینک روزانه · " + time + " تا " + end, () ->
+                    new TimePickerDialog(this, (picker, hour, minute) -> {
+                        String start = String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minute);
+                        new TimePickerDialog(this, (picker2, hour2, minute2) -> savePlan(value, "daily", start,
+                            String.format(java.util.Locale.ROOT, "%02d:%02d", hour2, minute2)),
+                            Integer.parseInt(end.substring(0, 2)), Integer.parseInt(end.substring(3)), true).show();
+                    }, Integer.parseInt(time.substring(0, 2)), Integer.parseInt(time.substring(3)), true).show());
                 button("حذف از فهرست", () -> {
                     if (Backup.RUNNING.get()) { alert("ابتدا همگام‌سازی را متوقف کنید."); return; }
                     try {
@@ -348,11 +381,11 @@ public final class MainActivity extends Activity {
         } catch (Exception error) { alert(Backup.friendly(error)); }
     }
 
-    private void savePlan(String tree, String mode, String time) {
+    private void savePlan(String tree, String mode, String time, String end) {
         try {
             synchronized (Store.PLAN_LOCK) {
                 JSONObject plans = new JSONObject(store.preferences.getString("folderPlans", "{}"));
-                plans.put(tree, SyncPlan.configure(mode, time, System.currentTimeMillis()));
+                plans.put(tree, SyncPlan.configure(mode, time, end, System.currentTimeMillis()));
                 if (!store.preferences.edit().putString("folderPlans", plans.toString()).commit()) throw new UserError("ذخیره ناموفق بود.");
             }
             show("folders");
