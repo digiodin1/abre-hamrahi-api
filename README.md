@@ -1,6 +1,6 @@
 # Abre Hamrahi API
 
-Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.2** preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
+Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.3** preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
 
 [Download Windows and Android](https://github.com/digiodin1/abre-hamrahi-api/releases/latest)
 
@@ -8,7 +8,7 @@ Free community Windows and Android clients for synchronizing selected local fold
 
 Install the Windows x64 setup from Releases, open **Abre Hamrahi API**, sign in with your own account, select folders, and save. Choose **Instant** or **Daily** with a local time beside each folder. These schedule controls save immediately and remain available during uploads; an ongoing pass finishes with its captured configuration.
 
-Enable automatic synchronization for unattended work. Enable **Run at Windows sign-in** separately if desired. The program runs in the notification area; closing the browser leaves synchronization running. Startup and unattended updates do not repeatedly open browser tabs. Use the tray icon or shortcut to reopen the panel.
+Enable automatic synchronization for unattended work. Daily folders expose a start and end time window; overnight windows such as 20:00–08:00 are supported. A pass that reaches the end is stopped safely and continues at the next scheduled window. Enable **Run at Windows sign-in** separately if desired. The program runs in the notification area; closing the browser leaves synchronization running. Startup and unattended updates do not repeatedly open browser tabs. Use the tray icon or shortcut to reopen the panel.
 
 The remote root defaults to the computer name. Source folder and file names remain exact. Two selected roots cannot share a name. Only one process can own a private profile. Credentials are encrypted with Windows DPAPI and are never returned by the local API.
 

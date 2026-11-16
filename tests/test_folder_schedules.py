@@ -205,3 +205,11 @@ class FolderScheduleTests(unittest.TestCase):
                          (current + timedelta(days=1)).timestamp())
         before = current - timedelta(seconds=1)
         self.assertEqual(self.manager.next_daily_run('03:15', before.timestamp()), current.timestamp())
+
+    def test_daily_window_supports_overnight_and_daytime_ranges(self):
+        overnight = self.manager.config['folders'][1] | {'dailyTime': '20:00', 'dailyEndTime': '08:00'}
+        self.assertTrue(self.manager.in_daily_window(overnight, datetime(2026, 11, 16, 7, 59).timestamp())[0])
+        self.assertFalse(self.manager.in_daily_window(overnight, datetime(2026, 11, 16, 12, 0).timestamp())[0])
+        daytime = overnight | {'dailyTime': '08:00', 'dailyEndTime': '18:00'}
+        self.assertTrue(self.manager.in_daily_window(daytime, datetime(2026, 11, 16, 12, 0).timestamp())[0])
+        self.assertFalse(self.manager.in_daily_window(daytime, datetime(2026, 11, 16, 19, 0).timestamp())[0])

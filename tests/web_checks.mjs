@@ -116,7 +116,8 @@ export async function runWebChecks() {
   assert(elements.get('folder-list').innerHTML.includes('data-folder-mode="0"'));
   const modeInput = {value:'daily',dataset:{folderMode:'0'},matches:selector=>selector==='[data-folder-mode]'};
   elements.get('folder-list').onchange({target:modeInput});
-  assert(elements.get('folder-list').innerHTML.includes('ساعت محلی'));
+  assert(elements.get('folder-list').innerHTML.includes('شروع بازه'));
+  assert(elements.get('folder-list').innerHTML.includes('پایان بازه'));
   const timeInput = {value:'23:45',dataset:{folderTime:'0'},matches:selector=>selector==='[data-folder-time]'};
   elements.get('folder-list').onchange({target:timeInput});
   const beforeEditingPoll = elements.get('folder-list').innerHTML;

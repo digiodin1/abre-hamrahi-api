@@ -562,6 +562,7 @@ class BackupManager:
         self.pending_paths = {}
         self.live_folder_stats = {}
         self.volume_saved = {}
+        self.active_window_end = None
         self.full_sync_generation = 0
         self.retry_at = 0
         self.retry_attempt = 0
@@ -682,13 +683,17 @@ class BackupManager:
             names.add(name.casefold())
             sync_mode = item.get('syncMode', 'instant')
             daily_time = item.get('dailyTime', '02:00')
+            daily_end = item.get('dailyEndTime', '23:59')
             if sync_mode not in ('instant', 'daily'):
                 raise BackupError('حالت همگام‌سازی پوشه باید آنی یا روزانه باشد.')
             if not isinstance(daily_time, str) or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', daily_time):
                 raise BackupError('ساعت همگام‌سازی روزانه معتبر نیست؛ نمونه: 02:00')
+            if not isinstance(daily_end, str) or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', daily_end):
+                raise BackupError('پایان بازهٔ روزانه معتبر نیست؛ نمونه: 08:00')
             result['folders'].append({'id': job_id, 'path': str(resolved),
                                       'name': name,
                                       'syncMode': sync_mode, 'dailyTime': daily_time,
+                                      'dailyEndTime': daily_end,
                                       'enabled': item.get('enabled', True) is True})
         return result
 
@@ -704,14 +709,17 @@ class BackupManager:
         with self.lock:
             job_id = data.get('job')
             sync_mode, daily_time = data.get('syncMode'), data.get('dailyTime')
+            daily_end = data.get('dailyEndTime', '23:59')
             if sync_mode not in ('instant', 'daily') or not isinstance(daily_time, str) or not re.fullmatch(
                     r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', daily_time):
                 raise BackupError('زمان‌بندی پوشه معتبر نیست.')
+            if not isinstance(daily_end, str) or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', daily_end):
+                raise BackupError('بازهٔ زمانی پوشه معتبر نیست.')
             folders = [dict(job) for job in self.config['folders']]
             selected = next((job for job in folders if job['id'] == job_id), None)
             if selected is None:
                 raise BackupError('پوشه پیدا نشد.', 404)
-            selected.update(syncMode=sync_mode, dailyTime=daily_time)
+            selected.update(syncMode=sync_mode, dailyTime=daily_time, dailyEndTime=daily_end)
             config = self.config | {'folders': folders}
             atomic_json(self.config_path, config)
             self.config = config
@@ -761,6 +769,7 @@ class BackupManager:
             self.state['folderSchedules'] = {
                 job['id']: {'mode': job.get('syncMode', 'instant'),
                             'dailyTime': job.get('dailyTime', '02:00'),
+                            'dailyEndTime': job.get('dailyEndTime', '23:59'),
                             'nextRun': self.folder_schedules.get(job['id']) if job['enabled'] else None}
                 for job in self.config['folders']}
             self.state['quotaStale'] = (self.quota_checked is None or
@@ -1003,6 +1012,30 @@ class BackupManager:
             target += timedelta(days=1)
         return target.timestamp()
 
+    @staticmethod
+    def window_bounds(start_time, end_time, at=None):
+        current = datetime.fromtimestamp(time.time() if at is None else at)
+        start_hour, start_minute = map(int, start_time.split(':'))
+        end_hour, end_minute = map(int, end_time.split(':'))
+        start = current.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+        end = current.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+        overnight = (end_hour, end_minute) <= (start_hour, start_minute)
+        if overnight:
+            end += timedelta(days=1)
+            if current < start:
+                start -= timedelta(days=1)
+                end -= timedelta(days=1)
+        elif current < start:
+            start -= timedelta(days=1)
+            end -= timedelta(days=1)
+        return start.timestamp(), end.timestamp()
+
+    @classmethod
+    def in_daily_window(cls, job, at=None):
+        current = time.time() if at is None else at
+        start, end = cls.window_bounds(job.get('dailyTime', '02:00'), job.get('dailyEndTime', '23:59'), current)
+        return start <= current < end, start, end
+
     def configure_folder_schedules(self):
         with self.db() as db:
             previous = {job: (daily_time, next_run) for job, daily_time, next_run in
@@ -1035,8 +1068,18 @@ class BackupManager:
         self.state['pendingSync'] = pending
         deadlines = [deadline for deadline in (self.change_due if pending else None, self.state['nextRun'] if instant else None)
                      if deadline is not None]
-        deadlines.extend(self.folder_schedules[job['id']] for job in self.config['folders']
-                         if job['enabled'] and job.get('syncMode') == 'daily')
+        now = time.time()
+        for job in self.config['folders']:
+            if not job['enabled'] or job.get('syncMode') != 'daily':
+                continue
+            deadline = self.folder_schedules[job['id']]
+            active, _, _ = self.in_daily_window(job, now)
+            if deadline <= now and not active:
+                deadline = self.next_daily_run(job.get('dailyTime', '02:00'), now)
+                self.folder_schedules[job['id']] = deadline
+                with self.db() as db:
+                    db.execute('UPDATE folder_schedules SET next_run=? WHERE job=?', (deadline, job['id']))
+            deadlines.append(deadline)
         ready = (self.config['automatic'] and not self.config['automaticPaused'] and
                  bool(self.client.tokens) and not self.config_error and not self.state['busy'])
         self.state['nextSync'] = max(min(deadlines), self.retry_at) if ready and deadlines else None
@@ -1057,6 +1100,11 @@ class BackupManager:
             if trigger == 'change' and only_paths is None and self.full_sync_generation <= self.synced_generation:
                 only_paths = set(self.pending_paths) or None
             self.stop.clear()
+            self.active_window_end = None
+            if trigger == 'daily' and only_jobs:
+                windows = [self.in_daily_window(job)[2] for job in self.config['folders']
+                           if job['id'] in only_jobs and job.get('syncMode') == 'daily']
+                self.active_window_end = min(windows) if windows else None
             self.state.update(busy=True, action=action, trigger=trigger, phase='شروع بررسی', current='',
                               uploaded=0, skipped=0, bytes=0, errors=[], runId=None, steps=[], fileStage=None)
             self.active_result = None
@@ -1131,6 +1179,9 @@ class BackupManager:
     def cancelled(self):
         if self.stop.is_set():
             raise BackupError('کار با درخواست شما متوقف شد؛ فایل‌های موفق حفظ شدند.')
+        if self.active_window_end is not None and time.time() >= self.active_window_end:
+            self.stop.set()
+            raise BackupError('بازهٔ مجاز این سینک به پایان رسید؛ ادامهٔ فایل‌ها در نوبت بعد انجام می‌شود.')
 
     def walk(self, root, config, errors, skips, on_error=None, only_paths=None, empty_directories=None):
         def failure(path, message):
@@ -1641,7 +1692,8 @@ class BackupManager:
             interval_due = bool(instant) and self.state['nextRun'] is not None and self.state['nextRun'] <= current
             change_due = bool(instant) and self.change_generation > self.synced_generation and self.change_due is not None and self.change_due <= current
             daily_jobs = {job['id'] for job in self.config['folders'] if job['enabled'] and
-                          job.get('syncMode') == 'daily' and self.folder_schedules[job['id']] <= current}
+                          job.get('syncMode') == 'daily' and self.folder_schedules[job['id']] <= current and
+                          self.in_daily_window(job, current)[0]}
             only_jobs = daily_jobs | ({job['id'] for job in instant} if interval_due or change_due else set())
             trigger = 'schedule' if interval_due else 'daily' if daily_jobs else 'change'
         try:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.3 - 2026-11-16
+
+- Add a start/end time window to every daily folder schedule.
+- Allow overnight windows such as 20:00–08:00 and stop an automatic pass at the configured end while preserving successful files for the next run.
+- Keep legacy daily schedules compatible with a 23:59 end until the owner chooses a narrower window.
+- Add scheduler, window-boundary and UI regression coverage.
+
 ## 1.7.2 - 2026-11-14
 
 - Exclude explicitly historical native versions from current folder listings on Windows and Android, preserving provider history and guards against genuine duplicate current names.

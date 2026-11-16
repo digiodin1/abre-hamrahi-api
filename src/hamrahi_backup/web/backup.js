@@ -78,18 +78,18 @@ function renderControls() {
   $('busy-tag').textContent = closing ? 'درخواست خروج ثبت شد' : busy ? 'در حال اجرا' : 'آماده';
   $('status-dot').classList.toggle('working', busy && !closing);
   $('nav-spinner').hidden = !busy || closing;
-  document.querySelectorAll('[data-remove],[data-folder-enable],[data-folder-mode],[data-folder-time],[data-retry]').forEach(el => el.disabled = busy || pending);
-  document.querySelectorAll('[data-folder-mode],[data-folder-time]').forEach(el => el.disabled = !initialized || pending);
+  document.querySelectorAll('[data-remove],[data-folder-enable],[data-folder-mode],[data-folder-time],[data-folder-end],[data-retry]').forEach(el => el.disabled = busy || pending);
+  document.querySelectorAll('[data-folder-mode],[data-folder-time],[data-folder-end]').forEach(el => el.disabled = !initialized || pending);
 }
 function renderFolders(force=false) {
-  if (!force && document.activeElement?.matches('[data-folder-mode],[data-folder-time]')) return;
+  if (!force && document.activeElement?.matches('[data-folder-mode],[data-folder-time],[data-folder-end]')) return;
   $('folder-list').innerHTML = folders.length ? folders.map((f,i) => `
     <div class="folder-row"><input type="checkbox" data-folder-enable="${i}" ${f.enabled?'checked':''} aria-label="فعال‌بودن ${esc(f.name)}"><span class="folder-icon">▱</span><div class="folder-info"><div class="folder-heading"><strong>${esc(f.name)}</strong>${folderSizeLabel(f)}</div><p dir="ltr">${esc(f.path)}</p>${folderAuditLabel(f)}${folderScheduleLabel(f,i)}</div>${f.id?`<button data-folder-files="${esc(f.id)}">فایل‌ها و حجم</button>`:''}<button data-remove="${i}">حذف</button></div>`).join('') : '<div class="empty">هنوز پوشه‌ای انتخاب نشده است</div>';
 }
 function folderScheduleLabel(folder, index) {
   const daily = folder.syncMode === 'daily', schedule = model?.state.folderSchedules?.[folder.id];
   const next = daily && schedule?.nextRun && schedule.dailyTime === folder.dailyTime ? `نوبت بعد: ${date(schedule.nextRun*1000)}` : '';
-  return `<div class="folder-schedule"><label>زمان‌بندی<select data-folder-mode="${index}" aria-label="زمان‌بندی ${esc(folder.name)}"><option value="instant" ${daily?'':'selected'}>سینک آنی</option><option value="daily" ${daily?'selected':''}>سینک روزانه</option></select></label><label ${daily?'':'hidden'}>ساعت محلی<input type="time" data-folder-time="${index}" value="${esc(folder.dailyTime || '02:00')}" required aria-label="ساعت سینک ${esc(folder.name)}"></label><span class="next-run">${esc(next)}</span></div>`;
+  return `<div class="folder-schedule"><label>زمان‌بندی<select data-folder-mode="${index}" aria-label="زمان‌بندی ${esc(folder.name)}"><option value="instant" ${daily?'':'selected'}>سینک آنی</option><option value="daily" ${daily?'selected':''}>سینک روزانه</option></select></label><label ${daily?'':'hidden'}>شروع بازه<input type="time" data-folder-time="${index}" value="${esc(folder.dailyTime || '02:00')}" required aria-label="شروع بازهٔ سینک ${esc(folder.name)}"></label><label ${daily?'':'hidden'}>پایان بازه<input type="time" data-folder-end="${index}" value="${esc(folder.dailyEndTime || '23:59')}" required aria-label="پایان بازهٔ سینک ${esc(folder.name)}"></label><span class="next-run">${esc(next)}</span></div>`;
 }
 function folderSizeLabel(folder) {
   const stats = model?.folderStats?.[folder.id];
@@ -293,7 +293,7 @@ $('add-folder').onclick=()=>{
   if(!/^(?:[a-z]:[\\/]|\/)/i.test(path)) { message('مسیر کامل پوشه را وارد کنید.',true); return; }
   const name=path.split(/[\\/]/).pop();
   if(folders.some(f=>f.path.toLowerCase().replaceAll('/','\\')===path.toLowerCase().replaceAll('/','\\'))) { message('این پوشه قبلاً اضافه شده است.',true); return; }
-  folders.push({path,name,enabled:true,syncMode:'instant',dailyTime:'02:00'}); $('folder-path').value=''; renderFolders(); changed();
+  folders.push({path,name,enabled:true,syncMode:'instant',dailyTime:'02:00',dailyEndTime:'23:59'}); $('folder-path').value=''; renderFolders(); changed();
 };
 $('folder-list').onclick=event=>{
   const button=event.target.closest('[data-remove]');
@@ -301,15 +301,15 @@ $('folder-list').onclick=event=>{
 };
 $('folder-list').onchange=event=>{
   if(event.target.matches('[data-folder-enable]')) { folders[Number(event.target.dataset.folderEnable)].enabled=event.target.checked; changed(); }
-  const mode = event.target.matches('[data-folder-mode]'), time = event.target.matches('[data-folder-time]');
-  if (!mode && !time) return;
-  const index = Number(mode ? event.target.dataset.folderMode : event.target.dataset.folderTime), folder = folders[index];
+  const mode = event.target.matches('[data-folder-mode]'), time = event.target.matches('[data-folder-time]'), end = event.target.matches('[data-folder-end]');
+  if (!mode && !time && !end) return;
+  const index = Number(mode ? event.target.dataset.folderMode : time ? event.target.dataset.folderTime : event.target.dataset.folderEnd), folder = folders[index];
   const previous = {...folder};
-  if (mode) folder.syncMode = event.target.value; else folder.dailyTime = event.target.value;
+  if (mode) folder.syncMode = event.target.value; else if (time) folder.dailyTime = event.target.value; else folder.dailyEndTime = event.target.value;
   if (!folder.id) { renderFolders(true); changed(); return; }
   return perform(event.target,async()=>{
     try {
-      await api('folder-schedule',{job:folder.id,syncMode:folder.syncMode || 'instant',dailyTime:folder.dailyTime});
+      await api('folder-schedule',{job:folder.id,syncMode:folder.syncMode || 'instant',dailyTime:folder.dailyTime,dailyEndTime:folder.dailyEndTime || '23:59'});
     } catch (error) { Object.assign(folder,previous); renderFolders(true); throw error; }
     model.config.folders = model.config.folders.map(item => item.id===folder.id ? {...folder} : item);
     renderFolders(true);
