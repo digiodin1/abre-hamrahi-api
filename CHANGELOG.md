@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.5 - 2026-11-16
+
+- Added in-app GitHub release checking and update installation flow.
+- Windows and Android block new sync runs once a newer stable release is 30 days old, retaining the known deadline offline.
+- Validate platform asset name, HTTPS source, size and SHA-256; Android also validates the APK signing identity. Downloads run in bounded background workers.
+- Android downloads the official APK and opens the system installer confirmation.
+
 ## 1.7.4 - 2026-11-16
 
 - Refreshed Android dashboard with cards, active navigation and clearer progress.

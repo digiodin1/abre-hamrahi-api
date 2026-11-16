@@ -80,6 +80,17 @@ public final class MainActivity extends Activity {
     @Override public void onResume() {
         super.onResume();
         handler.post(update);
+        worker.submit(() -> {
+            JSONObject info = Update.check(this, false);
+            if (info.optBoolean("available")) handler.post(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                boolean required = Update.required(this);
+                new AlertDialog.Builder(this).setTitle(required ? "به‌روزرسانی اجباری" : "نسخهٔ جدید آماده است")
+                    .setMessage("نسخهٔ " + info.optString("version") + (required ? "؛ مهلت ۳۰روزه پایان یافته و شروع سینک جدید متوقف است." : "؛ مهلت نصب: " + android.text.format.DateFormat.format("yyyy/MM/dd", info.optLong("deadline"))))
+                    .setCancelable(!required).setPositiveButton("به‌روزرسانی", (dialog, which) -> show("settings"))
+                    .setNegativeButton(required ? "بستن" : "بعداً", (dialog, which) -> { if(required) finish(); }).show();
+            });
+        });
     }
 
     @Override public void onPause() {
@@ -197,7 +208,7 @@ public final class MainActivity extends Activity {
         screen.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         screen.setBackgroundColor(Color.rgb(246, 249, 252));
         TextView title = new TextView(this);
-        title.setText("Abre Hamrahi API · 1.7.4");
+        title.setText("Abre Hamrahi API · 1.7.5");
         title.setTypeface(bold);
         title.setTextColor(Color.WHITE); title.setTextSize(21); title.setPadding(dp(20), dp(24), dp(20), dp(18));
         title.setBackground(surface(Color.rgb(16, 92, 137), 0));
@@ -460,6 +471,20 @@ public final class MainActivity extends Activity {
     }
 
     private void settings() {
+        JSONObject cached = Update.cached(this);
+        TextView updateState = text(cached.optBoolean("available") ? "نسخهٔ " + cached.optString("version") + " · مهلت نصب: " + android.text.format.DateFormat.format("yyyy/MM/dd", cached.optLong("deadline")) : "نسخهٔ " + ReleasePolicy.VERSION);
+        button("بررسی به‌روزرسانی", () -> run(() -> {
+            JSONObject info = Update.check(this, true);
+            handler.post(() -> updateState.setText(info.optBoolean("available") ? "نسخهٔ " + info.optString("version") + " آماده است." : "نسخهٔ شما به‌روز است."));
+            return info.has("error") ? info.getString("error") : info.optBoolean("available") ? "نسخهٔ جدید پیدا شد؛ دریافت آن را تأیید کنید." : "نسخهٔ شما به‌روز است.";
+        }));
+        button("دریافت و نصب", () -> run(() -> {
+            if (Backup.RUNNING.get()) return "ابتدا همگام‌سازی را متوقف کنید.";
+            handler.post(() -> updateState.setText("در حال دریافت و کنترل فایل به‌روزرسانی…"));
+            String result = Update.downloadAndInstall(this);
+            handler.post(() -> updateState.setText(result));
+            return result;
+        }));
         EditText root = field("پوشهٔ اصلی در ابر", InputType.TYPE_CLASS_TEXT);
         root.setText(store.preferences.getString("remoteRoot", "Android"));
         root.setEnabled(store.preferences.getString("indexedRoot", "").isEmpty());
@@ -488,6 +513,7 @@ public final class MainActivity extends Activity {
     }
 
     private void start(boolean preview, String retryPath) {
+        if (!preview && Update.required(this)) { show("settings"); alert("ابتدا به‌روزرسانی اجباری را نصب کنید."); return; }
         if (Backup.RUNNING.get()) { alert("عملیات دیگری در حال اجراست."); return; }
         if (!preview && !SyncService.networkAllowed(this, store)) { alert("اتصال مطابق تنظیمات شبکه برقرار نیست."); return; }
         show("status");
@@ -505,6 +531,7 @@ public final class MainActivity extends Activity {
     }
 
     private void automatic() {
+        if (Update.required(this)) { show("settings"); alert("ابتدا به‌روزرسانی اجباری را نصب کنید."); return; }
         try {
             if (store.session().optString("access").isEmpty()) { alert("ابتدا وارد حساب شوید."); return; }
             if (new JSONArray(store.preferences.getString("folders", "[]")).length() == 0) {

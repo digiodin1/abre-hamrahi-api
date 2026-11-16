@@ -219,6 +219,17 @@ export async function runWebChecks() {
   assert(elements.get('errors').children.some(p=>p.textContent.includes('synthetic error')), 'Previous failure must remain visible during recovery');
   model.state.busy = false;
   await vm.runInContext('poll()', context);
+  model.update = {available:true,version:'1.8.0',mandatory:true,deadline:1796083200};
+  await vm.runInContext('poll()', context);
+  assert(elements.get('sync').disabled,'Mandatory upgrade must disable new sync');
+  assert(!elements.get('update-install').hidden,'Mandatory upgrade must offer installation');
+  assert(!elements.get('update-install').disabled,'Idle upgrade must remain available');
+  model.update.installing=true;
+  await vm.runInContext('poll()', context);
+  assert(elements.get('update-install').disabled,'Do not start duplicate installations');
+  assert(!elements.get('shutdown').disabled,'Upgrade must not trap the user in the app');
+  model.update={available:false};
+  await vm.runInContext('poll()', context);
   elements.get('remote-root').value='UNSAVED';
   elements.get('remote-root').listeners.input();
   const savesBeforeExit=calls.filter(c=>c.action==='config').length;

@@ -243,7 +243,28 @@ public final class CloudChecks {
     }
 
     public static void main(String[] args) throws Exception {
+        updatePolicy();
         namesAndDestinations(); folders(); currentVersions(); transfers(); refreshAndAmbiguousMove(); schedulesAndTrash();
         System.out.println("Android policy and cloud adapter checks passed: " + assertions + " assertions; no real account or network.");
+    }
+
+    private static void updatePolicy() throws Exception {
+        expect(ReleasePolicy.compare("1.10.0","1.9.9")>0,"Numeric version comparison failed");
+        expect(ReleasePolicy.compare("v1.7.5","1.7.5")==0,"Same version treated as update");
+        String url="https://github.com/digiodin1/abre-hamrahi-api/releases/download/v1.8.0/AbreHamrahiAPI-1.8.0-android.apk";
+        JSONObject asset=new JSONObject().put("name","AbreHamrahiAPI-1.8.0-android.apk").put("browser_download_url",url).put("state","uploaded").put("size",10000).put("digest","sha256:"+new String(new char[64]).replace('\0','a'));
+        JSONObject release=new JSONObject().put("tag_name","v1.8.0").put("published_at","2026-11-01T00:00:00Z").put("assets",new JSONArray().put(asset));
+        long now=1793491200000L;
+        JSONObject info=ReleasePolicy.select(release,"1.7.5",now);
+        expect(info.optBoolean("available"),"Official APK was not selected");
+        expect(!ReleasePolicy.required(info,info.getLong("deadline")-1),"Update forced too soon");
+        expect(ReleasePolicy.required(info,info.getLong("deadline")),"30-day policy not enforced");
+        expect(!ReleasePolicy.select(release,"1.8.0",now).optBoolean("available"),"Current version prompted update");
+        release.put("prerelease",true);
+        expect(!ReleasePolicy.select(release,"1.7.5",now).optBoolean("available"),"Prerelease selected");
+        release.put("prerelease",false);asset.put("browser_download_url","https://evil.invalid/test.apk");
+        expect(!ReleasePolicy.select(release,"1.7.5",now).optBoolean("available"),"Untrusted APK selected");
+        asset.put("browser_download_url",url).put("digest","");
+        rejected(()->ReleasePolicy.select(release,"1.7.5",now));
     }
 }

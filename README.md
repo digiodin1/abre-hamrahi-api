@@ -1,8 +1,10 @@
 # Abre Hamrahi API
 
-Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.4** adds a refreshed Android dashboard and mobile daily time windows, preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
+Free community Windows and Android clients for synchronizing selected local folders to Abrehamrahi. Version **1.7.5** adds a refreshed Android dashboard and mobile daily time windows, preserves original names, replaces changed files in their existing cloud location, and sends locally removed files to the provider's native trash. An unchanged file is reused.
 
 [Download Windows and Android](https://github.com/digiodin1/abre-hamrahi-api/releases/latest)
+
+Settings includes verified in-app updates from this repository. A newer stable release becomes mandatory after 30 days; Android installation still requires system confirmation. See [update behavior and maintainer requirements](docs/updates.md). Versions before 1.7.5 require one manual upgrade.
 
 ## Windows
 

@@ -251,6 +251,10 @@ public final class Backup {
     }
 
     public void run(boolean preview, boolean automatic, String onlyPath) {
+        if (!preview) {
+            Update.check(context, false);
+            if (Update.required(context)) { store.report("مهلت ۳۰روزهٔ به‌روزرسانی پایان یافته؛ نسخهٔ جدید را از تنظیمات نصب کنید."); return; }
+        }
         if (!RUNNING.compareAndSet(false, true)) return;
         File temporary = new File(context.getCacheDir(), "snapshot.part");
         try {

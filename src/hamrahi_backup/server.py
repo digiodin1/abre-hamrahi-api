@@ -31,6 +31,10 @@ class PanelServer(ThreadingHTTPServer):
 
     def __init__(self, manager, port=8765):
         self.manager = manager
+        def update_exit():
+            self.request_exit()
+            threading.Thread(target=self.shutdown, daemon=True, name='update-shutdown').start()
+        manager.update_exit = update_exit
         self.csrf = secrets.token_urlsafe(32)
         self.exit_requested = threading.Event()
         self.slots = threading.BoundedSemaphore(16)
@@ -38,6 +42,7 @@ class PanelServer(ThreadingHTTPServer):
             b'{{APP_VERSION}}', __version__.encode('ascii')), mime)
                        for path, (name, mime) in ASSETS.items()}
         super().__init__(('127.0.0.1', port), Handler)
+        manager.update_port = self.server_port
         self.hosts = {f'127.0.0.1:{self.server_port}', f'localhost:{self.server_port}'}
         self.origins = {'http://' + host for host in self.hosts}
 

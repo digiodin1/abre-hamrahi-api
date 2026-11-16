@@ -21,5 +21,6 @@
       "port": 8765
     }
   ],
-  "startup": "manual by default; optional per-user Windows logon from settings"
+  "startup": "manual by default; optional per-user Windows logon from settings",
+  "updates": "Fixed official GitHub releases; SHA-256 validation; Android signer check; mandatory update after 30 days; check every 6 hours"
 }

@@ -10,6 +10,8 @@ Every action below is `POST /api/backup/<action>` with a JSON object, a same-ori
 
 | Action | Request / behavior |
 | --- | --- |
+| `update-check` | Start an asynchronous check of the fixed GitHub repository; no URL input is accepted. `GET /api/backup` returns `update` with `available`, `checking`, `installing`, optional `version`, `deadline`, `mandatory`, and sanitized `error`. |
+| `update-install` | Packaged Windows only, while idle and with no open folder chooser. Downloads and verifies the installer in a background worker, then closes and updates the program and restarts with its original profile/port. New sync starts return HTTP 426 after the newer release's 30-day deadline. See [updates](updates.md). |
 | `config` | Save the full configuration. Includes `remoteRoot`, `folders`, `automatic`, `syncOnChange`, `startupEnabled`, `intervalMinutes`, `settleSeconds`, `maxFileMiB`, `verifyUploads`, and `exclude`. Each folder accepts `syncMode` (`instant` by default or `daily`) and `dailyTime` (24-hour `HH:MM`, default `02:00`). Folder names are derived from local paths, regardless of a supplied alias. |
 | `folder-schedule` | `{ "job": "<configured ID>", "syncMode": "instant" or "daily", "dailyTime": "HH:MM" }`. Saves only that folder schedule while an upload is running. Path, enable flags, account and current pass are untouched. |
 | `browse` | Open the Windows folder chooser; returns a selected path or cancellation. |

@@ -72,6 +72,7 @@ def main(argv=None):
         with instance_lock(directory):
             manager = BackupManager(directory, state_dir=directory, port=args.port)
             server = PanelServer(manager, args.port)
+            manager.updater.tick()
             scheduler = threading.Thread(target=manager.scheduler, daemon=True, name='backup-scheduler')
             scheduler.start()
             url = f'http://127.0.0.1:{server.server_port}/'

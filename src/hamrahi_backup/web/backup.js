@@ -67,6 +67,9 @@ function renderControls() {
   for (const id of ['browse','add-folder','folder-path']) $(id).disabled = !initialized || pending;
   for (const id of ['sync','audit','repair-audit','test','logout']) $(id).disabled = busy || pending || !auth;
   $('check-connection').disabled = pending || !auth || !!model?.state.quotaRefreshing;
+  if (model?.update?.mandatory || model?.update?.installing) {
+    for (const id of ['sync','audit','repair-audit','test','resume-sync']) $(id).disabled = true;
+  }
   for (const id of ['remote-root','interval','max-size','settle','workers','automatic','verify','excludes']) $(id).disabled = !initialized || busy || pending;
   $('sync-on-change').disabled = busy || pending || !$('automatic').checked;
   $('startup').disabled = busy || pending || !model?.startup?.supported;
@@ -177,6 +180,8 @@ function renderProgress(s) {
   $('recovery-state').textContent = recovery.attempt ? (recovery.enabled ? (s.busy ? 'تلاش مجدد خودکار در حال اجراست؛ فایل‌های موفق قبلی دوباره بارگذاری نمی‌شوند.' : `ادامهٔ خودکار پس از خطا: ${date(recovery.retryAt * 1000)} · تلاش ${nf.format(recovery.attempt)}`) : 'ادامهٔ خودکار متوقف است؛ برای ادامه «شروع / ادامهٔ پشتیبان‌گیری» را بزنید.') : '';
 }
 function render() {
+  ensureUpdateControls();
+  renderUpdate(model.update);
   const s = model.state, c = model.config, connection = s.connection;
   $('auth-form').hidden = model.authenticated;
   $('connected-actions').hidden = !model.authenticated;
@@ -203,6 +208,21 @@ function render() {
   if (views.run.run !== run) { views.run.run = run; views.run.offset = 0; }
   $('history').innerHTML = model.history.length ? `<table><thead><tr><th>زمان</th><th>نوع</th><th>فایل تازه</th><th>بدون تغییر</th><th>حجم</th><th>نتیجه</th></tr></thead><tbody>${model.history.map((h,i)=>`<tr><td><button class="link" data-report="${i}">${date(h.at)}</button></td><td>${h.audit?'بررسی صحت':h.retry?'تلاش مجدد':h.preview?'پیش‌نمایش':'ارسال'}</td><td>${nf.format(h.uploaded)}</td><td>${nf.format(h.unchanged)}</td><td dir="ltr">${size(h.bytes)}</td><td class="${h.ok?'success':'bad'}">${h.ok?'✓ موفق':'✕ '+nf.format(h.errors.length)+' خطا'}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">گزارشی ثبت نشده است.</div>';
   renderControls();
+}
+function ensureUpdateControls() {
+  $('update-check').onclick = () => perform($('update-check'), async () => { const info = await api('update-check'); renderUpdate(info); message('بررسی نسخهٔ جدید آغاز شد؛ نتیجه همین‌جا نمایش داده می‌شود.'); });
+  $('update-install').onclick = () => perform($('update-install'), async () => { const info = await api('update-install'); message(info.message); });
+}
+function renderUpdate(info) {
+  if (!info) return;
+  const state = $('update-state'), install = $('update-install');
+  if (!state) return;
+  state.textContent = info.installing ? 'در حال دریافت و کنترل فایل نصب…' : info.error || (info.available ? `نسخهٔ ${info.version} · مهلت به‌روزرسانی: ${date(info.deadline * 1000)}${info.mandatory ? ' · به‌روزرسانی اجباری؛ سینک جدید متوقف است.' : ''}` : `نسخهٔ ${model?.provider?.release || 'نصب‌شده'}؛ نسخهٔ جدیدی یافت نشد.`);
+  install.hidden = !info.available;
+  install.disabled = !!info.installing || !!model?.state?.busy;
+  install.textContent = info.mandatory ? 'به‌روزرسانی اجباری' : 'دریافت و نصب';
+  if (info.mandatory) install.hidden = false;
+  if (info.mandatory) message('مهلت ۳۰روزهٔ نسخهٔ جدید پایان یافته؛ از تنظیمات، به‌روزرسانی را نصب کنید.', true);
 }
 async function loadItems(viewName) {
   const view = views[viewName], container = $(viewName + '-files');

@@ -35,6 +35,7 @@ from .startup import StartupRegistration, StartupPathError
 from .layout import CloudLayout, METADATA
 from .transport import PooledHTTPSOpener
 from . import __version__
+from . import updater
 
 API = 'https://abrehamrahi.ir/api/'
 DEFAULT_EXCLUDES = []
@@ -566,6 +567,9 @@ class BackupManager:
         self.full_sync_generation = 0
         self.retry_at = 0
         self.retry_attempt = 0
+        self.updater = updater.Updater(self.state_dir / 'updates', __version__)
+        self.update_exit = None
+        self.update_port = port
         self.change_monitor = ChangeMonitor(self._on_source_change)
         self.client = client or HamrahiClient(self.state_dir)
         self.state = {'busy': False, 'action': None, 'phase': 'آماده', 'current': '',
@@ -796,6 +800,7 @@ class BackupManager:
             from .audit import folder_summaries, match_summary
             folder_stats = folder_summaries(self)
             return json.loads(json.dumps({'config': self.config, 'state': self.state, 'history': self.history,
+                                          'update': self.updater.snapshot(),
                                           'folderStats': folder_stats, 'syncMatch': match_summary(self, folder_stats),
                                           'authenticated': bool(self.client.tokens),
                                           'error': self.config_error or self.client.session_error,
@@ -1081,10 +1086,13 @@ class BackupManager:
                     db.execute('UPDATE folder_schedules SET next_run=? WHERE job=?', (deadline, job['id']))
             deadlines.append(deadline)
         ready = (self.config['automatic'] and not self.config['automaticPaused'] and
-                 bool(self.client.tokens) and not self.config_error and not self.state['busy'])
+                 bool(self.client.tokens) and not self.config_error and not self.state['busy'] and
+                 not self.updater.installing and not self.updater.snapshot().get('mandatory'))
         self.state['nextSync'] = max(min(deadlines), self.retry_at) if ready and deadlines else None
 
     def start(self, action, trigger='manual', only_paths=None, deep=False, only_jobs=None):
+        if self.updater.installing or (action != 'preview' and self.updater.snapshot().get('mandatory')):
+            raise BackupError('مهلت ۳۰روزهٔ به‌روزرسانی پایان یافته است؛ ابتدا نسخهٔ جدید را نصب کنید.', 426)
         if action not in ('preview', 'sync', 'audit', 'test', 'connection'):
             raise BackupError('عملیات معتبر نیست.')
         if not self.work_lock.acquire(False):
@@ -1668,6 +1676,7 @@ class BackupManager:
             while not self.shutdown.is_set():
                 try:
                     self.configure_change_monitor()
+                    self.updater.tick()
                     self.refresh_quota()
                     self.scheduler_tick()
                 except Exception:
@@ -1703,6 +1712,32 @@ class BackupManager:
             pass
 
     def handle(self, action, data):
+        if action == 'update-check':
+            self.updater.tick(force=True)
+            return self.updater.snapshot()
+        if action == 'update-install':
+            if os.name != 'nt' or not getattr(sys, 'frozen', False) or self.update_exit is None:
+                raise BackupError('نصب داخلی فقط در نسخهٔ بسته‌بندی‌شدهٔ ویندوز در دسترس است.')
+            with self.lock:
+                if self.browse_lock.locked() or not self.work_lock.acquire(False):
+                    raise BackupError('تا پایان همگام‌سازی یا بسته‌شدن انتخاب پوشه صبر کنید.', 409)
+                self.updater.installing = True
+            def install():
+                try:
+                    info = self.updater.refresh()
+                    if info.get('error') or not info.get('available'):
+                        raise ValueError('No verified release')
+                    path = self.updater.download(info)
+                    updater.launch_installer(path, ['--serve', '--data-dir', str(self.state_dir), '--port', str(self.update_port), '--no-browser'])
+                    self.update_exit()
+                except Exception:
+                    with self.updater.lock:
+                        self.updater.info['error'] = 'نصب به‌روزرسانی انجام نشد؛ فایل‌ها و تنظیمات شما حفظ شدند. دوباره تلاش کنید.'
+                finally:
+                    self.updater.installing = False
+                    self.work_lock.release()
+            threading.Thread(target=install, daemon=True, name='update-download').start()
+            return {'started': True, 'message': 'در حال دریافت و کنترل فایل نصب؛ پس از تأیید، برنامه بازراه‌اندازی می‌شود.'}
         if action == 'folder-schedule':
             return self.save_folder_schedule(data)
         if action == 'connection':
@@ -1786,6 +1821,8 @@ class BackupManager:
 
     def browse(self):
         with self.lock:
+            if self.updater.installing:
+                raise BackupError('برنامه در حال به‌روزرسانی است؛ کمی صبر کنید.', 409)
             if self.shutdown.is_set():
                 raise BackupError('برنامه در حال بسته‌شدن است.', 409)
             if not self.browse_lock.acquire(False):
