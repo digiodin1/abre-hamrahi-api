@@ -21,6 +21,10 @@ public final class Cloud {
     public interface Sessions {
         JSONObject session() throws Exception;
         void saveSession(JSONObject tokens) throws Exception;
+        default Object accountIdentity() { return this; }
+        default void saveRenewedSession(JSONObject tokens, Object identity) throws Exception {
+            saveSession(tokens);
+        }
     }
     public interface Connections { HttpURLConnection open(String url) throws Exception; }
     public interface Destinations { void check(String url) throws Exception; }
@@ -77,11 +81,33 @@ public final class Cloud {
     }
 
     public JSONObject json(String method, String path, JSONObject payload, boolean authenticated) throws Exception {
-        return request(method, path, payload, authenticated, true);
+        return request(method, path, payload, authenticated, true, authenticated ? store.accountIdentity() : null);
     }
 
-    private JSONObject request(String method, String path, JSONObject payload, boolean authenticated, boolean refresh) throws Exception {
+    public long[] quota() throws Exception {
+        JSONObject quota = json("GET", "v5/rgw/get-quota/", null, true);
+        long used = quotaBytes(quota, "used");
+        long plan = quotaBytes(quota, "total_plan");
+        long gift = quotaBytes(quota, "total_gift");
+        if (plan > Long.MAX_VALUE - gift) throw new UserError("ظرفیت حساب معتبر نیست.");
+        return new long[]{used, plan + gift};
+    }
+
+    private static long quotaBytes(JSONObject quota, String key) throws UserError {
+        Object raw = quota.opt(key);
+        if (!(raw instanceof Integer || raw instanceof Long) || ((Number) raw).longValue() < 0)
+            throw new UserError("ظرفیت حساب معتبر نیست.");
+        return ((Number) raw).longValue();
+    }
+
+    private void checkAccount(Object identity) throws UserError {
+        if (identity != null && identity != store.accountIdentity())
+            throw new UserError("نشست حساب تغییر کرد؛ دوباره تلاش کنید.");
+    }
+
+    private JSONObject request(String method, String path, JSONObject payload, boolean authenticated, boolean refresh, Object identity) throws Exception {
         check();
+        checkAccount(identity);
         if (!path.matches("v[0-9]+/[a-zA-Z0-9_/?=&.%-]+")) throw new UserError("مسیر API معتبر نیست.");
         HttpURLConnection connection = connect(API + path, method);
         try {
@@ -92,6 +118,7 @@ public final class Cloud {
             String usedToken = "";
             if (authenticated) {
                 String token = store.session().optString("access");
+                checkAccount(identity);
                 if (token.isEmpty()) throw new UserError("ابتدا وارد حساب شوید.");
                 connection.setRequestProperty("Authorization", "Bearer " + token);
                 usedToken = token;
@@ -107,14 +134,15 @@ public final class Cloud {
                 connection.disconnect();
                 synchronized (TOKEN_LOCK) {
                     JSONObject previous = store.session();
+                    checkAccount(identity);
                     if (usedToken.equals(previous.optString("access"))) {
                         JSONObject renewed = request("POST", "v2/profile/auth/token-refresh/",
-                            new JSONObject().put("refresh", previous.optString("refresh")), false, false);
+                            new JSONObject().put("refresh", previous.optString("refresh")), false, false, null);
                         if (!renewed.has("refresh")) renewed.put("refresh", previous.optString("refresh"));
-                        store.saveSession(renewed);
+                        store.saveRenewedSession(renewed, identity);
                     }
                 }
-                return request(method, path, payload, true, false);
+                return request(method, path, payload, true, false, identity);
             }
             if (status < 200 || status >= 300) {
                 if (connection.getErrorStream() != null) {

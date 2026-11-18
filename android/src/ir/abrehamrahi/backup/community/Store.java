@@ -18,6 +18,7 @@ import javax.crypto.spec.GCMParameterSpec;
 public final class Store implements Cloud.Sessions {
     public static final Object SESSION_LOCK = new Object();
     public static final Object PLAN_LOCK = new Object();
+    private static volatile Object accountIdentity = new Object();
     private final Context context;
     public final SharedPreferences preferences;
 
@@ -78,10 +79,44 @@ public final class Store implements Cloud.Sessions {
         }
     }
 
+    public void login(JSONObject tokens) throws Exception {
+        synchronized (SESSION_LOCK) {
+            saveSession(tokens);
+            clearQuota();
+            accountIdentity = new Object();
+        }
+    }
+
     public void logout() {
         synchronized (SESSION_LOCK) {
             new AtomicFile(new File(context.getFilesDir(), "session.enc")).delete();
+            clearQuota();
+            accountIdentity = new Object();
         }
+    }
+
+    @Override public Object accountIdentity() { return accountIdentity; }
+
+    @Override public void saveRenewedSession(JSONObject tokens, Object identity) throws Exception {
+        synchronized (SESSION_LOCK) {
+            if (identity != accountIdentity) throw new UserError("نشست حساب تغییر کرد؛ دوباره تلاش کنید.");
+            saveSession(tokens);
+        }
+    }
+
+    private void clearQuota() {
+        preferences.edit().remove("capacity").remove("used").remove("quotaAt").apply();
+    }
+
+    public long[] updateQuota(Cloud cloud) throws Exception {
+        Object identity = accountIdentity;
+        long[] quota = cloud.quota();
+        synchronized (SESSION_LOCK) {
+            if (identity != accountIdentity) throw new UserError("نشست حساب تغییر کرد؛ دوباره تلاش کنید.");
+            preferences.edit().putLong("capacity", quota[1]).putLong("used", quota[0])
+                .putLong("quotaAt", System.currentTimeMillis()).apply();
+        }
+        return quota;
     }
 
     public void report(String message) {

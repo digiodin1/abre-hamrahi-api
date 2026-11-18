@@ -144,6 +144,7 @@ class HamrahiClient:
         self.lock = threading.RLock()
         self.opener = PooledHTTPSOpener(urllib.request.build_opener(NoRedirect()))
         self.tokens = {}
+        self.session_identity = object()
         saved = state_dir / 'session.bin'
         self.session_error = None
         if saved.exists():
@@ -159,18 +160,21 @@ class HamrahiClient:
         if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] or len(value[k]) > 32768 for k in ('access', 'refresh')):
             raise BackupError('پاسخ ورود با ساختار شناخته‌شدهٔ سرویس سازگار نیست.')
 
-    def save_tokens(self, value):
+    def save_tokens(self, value, *, renewed=False):
         self.validate_tokens(value)
         tokens = {k: value[k] for k in ('access', 'refresh')}
         data = protect(json.dumps(tokens).encode())
         self.state_dir.mkdir(parents=True, exist_ok=True)
         atomic_bytes(self.state_dir / 'session.bin', data)
         self.tokens = tokens
+        if not renewed:
+            self.session_identity = object()
         self.session_error = None
 
     def forget(self):
         with self.lock:
             self.tokens = {}
+            self.session_identity = object()
             (self.state_dir / 'session.bin').unlink(missing_ok=True)
 
     def _json(self, method, path, payload=None, auth=True, retry=True):
@@ -183,10 +187,14 @@ class HamrahiClient:
                     raise
                 time.sleep(attempt + 1)
 
-    def _json_once(self, method, path, payload=None, auth=True, retry=True):
+    def _json_once(self, method, path, payload=None, auth=True, retry=True, session=None):
         if not re.fullmatch(r'v\d+/[a-zA-Z0-9_/?=&.%-]+', path):
             raise BackupError('مسیر API نامعتبر است.')
         with self.lock:
+            if session is not None and session is not self.session_identity:
+                raise BackupError('نشست حساب تغییر کرد؛ دوباره تلاش کنید.', 401)
+            if auth:
+                session = self.session_identity
             if auth and not self.tokens:
                 raise BackupError('ابتدا در حساب ابرهمراهی وارد شوید.', 401)
             headers = {'Accept-Language': 'fa', 'user-device': 'web-desktop',
@@ -196,7 +204,8 @@ class HamrahiClient:
         body = None if payload is None else json.dumps(payload).encode()
         req = urllib.request.Request(API + path, data=body, headers=headers, method=method)
         try:
-            with self.opener.open(req, timeout=self.timeout) as response:
+            timeout = min(12, self.timeout) if path in ('v5/rgw/get-quota/', 'v2/profile/auth/token-refresh/') else self.timeout
+            with self.opener.open(req, timeout=timeout) as response:
                 raw = response.read(4 * 1024 * 1024 + 1)
             if len(raw) > 4 * 1024 * 1024:
                 raise BackupError('پاسخ API بیش از حد مجاز بزرگ است.')
@@ -215,9 +224,11 @@ class HamrahiClient:
                 result = {}
             if error.code == 401 and auth and retry:
                 with self.lock:
+                    if session is not self.session_identity:
+                        raise BackupError('نشست حساب تغییر کرد؛ دوباره تلاش کنید.', 401) from None
                     if headers.get("Authorization") == "Bearer " + self.tokens.get("access", ""):
                         self.refresh()
-                return self._json_once(method, path, payload, auth, retry=False)
+                return self._json_once(method, path, payload, auth, retry=False, session=session)
             if result.get('captcha_required'):
                 raise BackupError('سرویس کپچا می‌خواهد؛ تصویر را دریافت و پاسخ را دستی وارد کنید.', 400, True) from None
             messages = {401: 'نشست معتبر نیست؛ دوباره وارد شوید.',
@@ -241,9 +252,10 @@ class HamrahiClient:
             except BackupError as error:
                 if error.status == 401:
                     self.forget()
+                    self.session_error = 'نشست ابرهمراهی پایان یافته است؛ برای ادامه دوباره وارد شوید.'
                 raise
             self.save_tokens({'access': result.get('access'),
-                              'refresh': result.get('refresh') or self.tokens.get('refresh')})
+                              'refresh': result.get('refresh') or self.tokens.get('refresh')}, renewed=True)
 
     @staticmethod
     def phone(value):
@@ -294,9 +306,10 @@ class HamrahiClient:
             raise BackupError('ساختار اطلاعات حساب تغییر کرده است.')
         return self.quota()
 
-    def quota(self, refresh=True):
-        quota = self._json('GET', 'v5/rgw/get-quota/') if refresh else self._json_once(
-            'GET', 'v5/rgw/get-quota/', retry=False)
+    def quota(self, *, background=False):
+        # Avoid network retries for the dashboard, but renew an expired access
+        # token exactly as a sync would.
+        quota = self._json_once('GET', 'v5/rgw/get-quota/') if background else self._json('GET', 'v5/rgw/get-quota/')
         values = [quota.get(key) for key in ('used', 'total_plan', 'total_gift')]
         if any(type(value) is not int or value < 0 for value in values):
             raise BackupError('ساختار ظرفیت حساب معتبر نیست؛ عدد قبلی حفظ شد.', 502)
@@ -567,6 +580,7 @@ class BackupManager:
         self.full_sync_generation = 0
         self.retry_at = 0
         self.retry_attempt = 0
+        self.daily_retries = {}
         self.updater = updater.Updater(self.state_dir / 'updates', __version__)
         self.update_exit = None
         self.update_port = port
@@ -774,7 +788,8 @@ class BackupManager:
                 job['id']: {'mode': job.get('syncMode', 'instant'),
                             'dailyTime': job.get('dailyTime', '02:00'),
                             'dailyEndTime': job.get('dailyEndTime', '23:59'),
-                            'nextRun': self.folder_schedules.get(job['id']) if job['enabled'] else None}
+                            'nextRun': self.folder_schedules.get(job['id']) if job['enabled'] else None,
+                            'retryAt': self.daily_retries.get(job['id'], (None, 0))[0]}
                 for job in self.config['folders']}
             self.state['quotaStale'] = (self.quota_checked is None or
                                        time.monotonic() - self.quota_checked > 90 or
@@ -795,7 +810,11 @@ class BackupManager:
                                       'totalBytes': total_bytes, 'matchedBytes': matched_bytes,
                                       'remainingBytes': max(0, total_bytes - matched_bytes),
                                       'percent': min(99.9, int(1000 * matched_bytes / total_bytes) / 10) if total_bytes and successful < total else 100 if total and successful == total else None}
-            self.state['recovery'] = {'attempt': self.retry_attempt, 'retryAt': self.retry_at or None,
+            retries = [(when, attempt) for when, attempt in self.daily_retries.values() if when]
+            if self.retry_at:
+                retries.append((self.retry_at, self.retry_attempt))
+            retry_at, attempt = min(retries, default=(None, 0))
+            self.state['recovery'] = {'attempt': attempt, 'retryAt': retry_at,
                                       'enabled': self.config['automatic'] and not self.config['automaticPaused']}
             from .audit import folder_summaries, match_summary
             folder_stats = folder_summaries(self)
@@ -834,21 +853,24 @@ class BackupManager:
                 return {'started': False}
             if self.state['quotaRefreshing'] or (not force and time.monotonic() < self.quota_next):
                 return {'started': False}
-            tokens = self.client.tokens
+            identity = getattr(self.client, 'session_identity', self.client.tokens)
+            previous = self.quota_checked
             self.state['quotaRefreshing'] = True
 
             def worker():
                 delay = 30
                 try:
-                    connection = self.client.quota(refresh=False)
+                    connection = self.client.quota(background=True)
                     with self.lock:
-                        if not self.shutdown.is_set() and self.client.tokens is tokens:
+                        if not self.shutdown.is_set() and getattr(self.client, 'session_identity', self.client.tokens) is identity:
                             self.set_connection(connection)
                 except Exception as error:
                     delay = 300 if isinstance(error, BackupError) and error.status == 429 else 60
                     with self.lock:
-                        if not self.shutdown.is_set() and self.client.tokens is tokens:
-                            self.state['quotaError'] = 'دریافت ظرفیت تازه ناموفق بود؛ عدد آخرین بررسی نمایش داده می‌شود.'
+                        if (not self.shutdown.is_set() and self.quota_checked == previous and
+                                getattr(self.client, 'session_identity', self.client.tokens) is identity):
+                            detail = str(error) if isinstance(error, BackupError) else 'پاسخ تازه قابل دریافت نبود.'
+                            self.state['quotaError'] = 'بررسی ظرفیت ناموفق بود: ' + detail
                 finally:
                     with self.lock:
                         self.state['quotaRefreshing'] = False
@@ -1058,6 +1080,8 @@ class BackupManager:
             for job_id in previous.keys() - schedules.keys():
                 db.execute('DELETE FROM folder_schedules WHERE job=?', (job_id,))
         self.folder_schedules = schedules
+        self.daily_retries = {job: retry for job, retry in self.daily_retries.items()
+                              if job in schedules and schedules[job] == previous.get(job, (None, None))[1]}
 
     def complete_daily_schedules(self, job_ids):
         with self.db() as db:
@@ -1066,12 +1090,13 @@ class BackupManager:
                     deadline = self.next_daily_run(job['dailyTime'])
                     db.execute('UPDATE folder_schedules SET next_run=? WHERE job=?', (deadline, job['id']))
                     self.folder_schedules[job['id']] = deadline
+                    self.daily_retries.pop(job['id'], None)
 
     def _refresh_automation(self):
         instant = self.instant_folders()
         pending = bool(instant) and self.change_generation > self.synced_generation
         self.state['pendingSync'] = pending
-        deadlines = [deadline for deadline in (self.change_due if pending else None, self.state['nextRun'] if instant else None)
+        deadlines = [max(deadline, self.retry_at) for deadline in (self.change_due if pending else None, self.state['nextRun'] if instant else None)
                      if deadline is not None]
         now = time.time()
         for job in self.config['folders']:
@@ -1082,13 +1107,14 @@ class BackupManager:
             if deadline <= now and not active:
                 deadline = self.next_daily_run(job.get('dailyTime', '02:00'), now)
                 self.folder_schedules[job['id']] = deadline
+                self.daily_retries.pop(job['id'], None)
                 with self.db() as db:
                     db.execute('UPDATE folder_schedules SET next_run=? WHERE job=?', (deadline, job['id']))
-            deadlines.append(deadline)
+            deadlines.append(max(deadline, self.daily_retries.get(job['id'], (0, 0))[0]))
         ready = (self.config['automatic'] and not self.config['automaticPaused'] and
                  bool(self.client.tokens) and not self.config_error and not self.state['busy'] and
                  not self.updater.installing and not self.updater.snapshot().get('mandatory'))
-        self.state['nextSync'] = max(min(deadlines), self.retry_at) if ready and deadlines else None
+        self.state['nextSync'] = min(deadlines) if ready and deadlines else None
 
     def start(self, action, trigger='manual', only_paths=None, deep=False, only_jobs=None):
         if self.updater.installing or (action != 'preview' and self.updater.snapshot().get('mandatory')):
@@ -1102,17 +1128,21 @@ class BackupManager:
                     (not self.config['automatic'] or self.config['automaticPaused'] or not self.client.tokens)):
                 self.work_lock.release()
                 raise BackupError('اجرای خودکار اکنون آماده نیست.', 409)
+            window_end = None
+            if trigger == 'daily' and only_jobs:
+                windows = [self.in_daily_window(job) for job in self.config['folders']
+                           if job['id'] in only_jobs and job['enabled'] and job.get('syncMode') == 'daily']
+                if len(windows) != len(only_jobs) or not all(window[0] for window in windows):
+                    self.work_lock.release()
+                    raise BackupError('بازهٔ مجاز سینک روزانه فعال نیست.', 409)
+                window_end = min(window[2] for window in windows)
             generation = self.change_generation
             self.active_generation = generation
             covers_instant = only_jobs is None or {job['id'] for job in self.instant_folders()} <= only_jobs
             if trigger == 'change' and only_paths is None and self.full_sync_generation <= self.synced_generation:
                 only_paths = set(self.pending_paths) or None
             self.stop.clear()
-            self.active_window_end = None
-            if trigger == 'daily' and only_jobs:
-                windows = [self.in_daily_window(job)[2] for job in self.config['folders']
-                           if job['id'] in only_jobs and job.get('syncMode') == 'daily']
-                self.active_window_end = min(windows) if windows else None
+            self.active_window_end = window_end
             self.state.update(busy=True, action=action, trigger=trigger, phase='شروع بررسی', current='',
                               uploaded=0, skipped=0, bytes=0, errors=[], runId=None, steps=[], fileStage=None)
             self.active_result = None
@@ -1161,8 +1191,14 @@ class BackupManager:
                     if action in ('sync', 'audit'):
                         if covers_instant and (trigger != 'change' or self.state['nextRun'] is None):
                             self.state['nextRun'] = time.time() + self.config['intervalMinutes'] * 60 if self.config['automatic'] else None
-                        if action == 'sync' and not only_paths and self.active_result:
-                            self.complete_daily_schedules(set(self.active_result.get('completedJobs', [])))
+                        if action == 'sync' and not only_paths:
+                            completed_jobs = set((self.active_result or {}).get('completedJobs', []))
+                            self.complete_daily_schedules(completed_jobs)
+                            if trigger == 'daily':
+                                for job in (only_jobs or set()) - completed_jobs:
+                                    if job in self.folder_schedules:
+                                        attempt = min(7, self.daily_retries.get(job, (0, 0))[1] + 1)
+                                        self.daily_retries[job] = (time.time() + min(300, 5 * 2 ** (attempt - 1)), attempt)
                         if succeeded and covers_instant and (not only_paths or trigger == 'change'):
                             self.synced_generation = max(self.synced_generation, generation)
                             self.pending_paths = {path: value for path, value in self.pending_paths.items()
@@ -1173,9 +1209,8 @@ class BackupManager:
                             if self.change_generation <= self.synced_generation:
                                 self.change_due = None
                                 self.pending_since = None
-                        elif not succeeded and self.config['automatic']:
-                            if covers_instant:
-                                self._queue_sync()
+                        elif not succeeded and self.config['automatic'] and covers_instant and trigger != 'daily':
+                            self._queue_sync()
                             self.retry_attempt = min(7, self.retry_attempt + 1)
                             self.retry_at = time.time() + min(300, 5 * 2 ** (self.retry_attempt - 1))
                     self.state.update(busy=False, current='')
@@ -1674,16 +1709,19 @@ class BackupManager:
     def scheduler(self):
         try:
             while not self.shutdown.is_set():
-                try:
-                    self.configure_change_monitor()
-                    self.updater.tick()
-                    self.refresh_quota()
-                    self.scheduler_tick()
-                except Exception:
-                    # A transient watcher/OS failure must not silently kill
-                    # automation. Keep private exception text out of the UI.
-                    self.update(watchError='پایش خودکار موقتاً ناموفق بود؛ تلاش دوباره انجام می‌شود.')
-                    self.shutdown.wait(5)
+                for operation in (self.scheduler_tick, self.configure_change_monitor,
+                                  self.updater.tick, self.refresh_quota):
+                    try:
+                        operation()
+                    except Exception:
+                        # Ancillary services must not skip the scheduled sync.
+                        if operation == self.scheduler_tick:
+                            self.update(scheduleError='زمان‌بندی موقتاً ناموفق بود؛ برنامه دوباره تلاش می‌کند.')
+                        elif operation == self.configure_change_monitor:
+                            self.update(watchError='پایش خودکار موقتاً ناموفق بود؛ تلاش دوباره انجام می‌شود.')
+                    else:
+                        if operation == self.scheduler_tick:
+                            self.update(scheduleError=None)
                 self.shutdown.wait(1)
         finally:
             self.change_monitor.close()
@@ -1700,11 +1738,24 @@ class BackupManager:
             instant = self.instant_folders()
             interval_due = bool(instant) and self.state['nextRun'] is not None and self.state['nextRun'] <= current
             change_due = bool(instant) and self.change_generation > self.synced_generation and self.change_due is not None and self.change_due <= current
-            daily_jobs = {job['id'] for job in self.config['folders'] if job['enabled'] and
-                          job.get('syncMode') == 'daily' and self.folder_schedules[job['id']] <= current and
-                          self.in_daily_window(job, current)[0]}
-            only_jobs = daily_jobs | ({job['id'] for job in instant} if interval_due or change_due else set())
-            trigger = 'schedule' if interval_due else 'daily' if daily_jobs else 'change'
+            daily_jobs = {}
+            for job in self.config['folders']:
+                key = job['id']
+                if not job['enabled'] or job.get('syncMode') != 'daily' or max(
+                        self.folder_schedules[key], self.daily_retries.get(key, (0, 0))[0]) > current:
+                    continue
+                active, _, end = self.in_daily_window(job, current)
+                if active:
+                    daily_jobs[key] = end
+            if daily_jobs:
+                earliest_end = min(daily_jobs.values())
+                only_jobs = {key for key, end in daily_jobs.items() if end == earliest_end}
+                trigger = 'daily'
+            elif current >= self.retry_at and (interval_due or change_due):
+                only_jobs = {job['id'] for job in instant}
+                trigger = 'schedule' if interval_due else 'change'
+            else:
+                return
         try:
             if only_jobs:
                 self.start('sync', trigger=trigger, only_jobs=only_jobs)
@@ -1778,6 +1829,7 @@ class BackupManager:
                 self.config = config
                 if action == 'resume' and self.config['automatic']:
                     self.retry_at = 0
+                    self.daily_retries.clear()
                     self._queue_sync()
                 elif action == 'pause' and self.state['busy'] and self.state['action'] == 'sync':
                     self.stop.set()

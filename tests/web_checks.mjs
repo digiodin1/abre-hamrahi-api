@@ -180,12 +180,14 @@ export async function runWebChecks() {
   await vm.runInContext('poll()', context);
   assert(elements.get('check-connection').disabled);
   assert(elements.get('capacity-detail').textContent.includes('در حال دریافت ظرفیت'));
+  assert(elements.get('quota-status').textContent.includes('در حال دریافت ظرفیت'));
   model.state.quotaRefreshing=false;
   model.state.quotaStale=true;
   model.state.quotaError='دریافت ظرفیت تازه ناموفق بود';
   await vm.runInContext('poll()', context);
   assert.equal(elements.get('capacity-gauge').attrs['aria-valuenow'],75);
   assert(elements.get('capacity-detail').textContent.includes(model.state.quotaError));
+  assert.equal(elements.get('quota-status').textContent,model.state.quotaError);
   model.state.quotaError=null;
   await vm.runInContext('poll()', context);
   assert(elements.get('capacity-detail').textContent.includes('عدد آخرین بررسی'));
@@ -196,6 +198,7 @@ export async function runWebChecks() {
   model.state.quotaStale=false;
   await vm.runInContext('poll()', context);
   assert.equal(elements.get('capacity-value').textContent,'۲٫۹۹ گیگابایت');
+  assert(elements.get('quota-status').textContent.includes('۲٫۹۹ گیگابایت فضای آزاد'));
   assert.equal(elements.get('capacity-percent').textContent,'۲۹٫۸۹٪ آزاد');
   assert(elements.get('capacity-detail').textContent.includes('مصرف‌شده: ۷٫۰۱ گیگابایت از ۱۰ گیگابایت (۷۰٫۱۱٪)'));
   assert(elements.get('quota').textContent.startsWith('مصرف‌شده: ۷٫۰۱'));

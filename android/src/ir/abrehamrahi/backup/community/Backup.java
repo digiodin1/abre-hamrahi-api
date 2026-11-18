@@ -392,11 +392,7 @@ public final class Backup {
                     }
                     store.preferences.edit().putLong("cloudBytes", remoteBytes).apply();
                     try {
-                        JSONObject quota = cloud.json("GET", "v5/rgw/get-quota/", null, true);
-                        long capacity = Math.addExact(quota.getLong("total_plan"), quota.getLong("total_gift"));
-                        long used = quota.getLong("used");
-                        if (capacity < 0 || used < 0 || quota.getLong("total_plan") < 0 || quota.getLong("total_gift") < 0) throw new UserError("ظرفیت حساب معتبر نیست.");
-                        store.preferences.edit().putLong("capacity", capacity).putLong("used", used).putLong("quotaAt", System.currentTimeMillis()).apply();
+                        store.updateQuota(cloud);
                     } catch (Exception error) { store.report("ظرفیت: " + friendly(error)); }
                 }
             }

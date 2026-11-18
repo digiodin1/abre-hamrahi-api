@@ -7,7 +7,7 @@ import java.util.Locale;
 import java.util.TimeZone;
 
 public final class ReleasePolicy {
-    public static final String VERSION = "1.7.5";
+    public static final String VERSION = "1.7.7";
     public static final long GRACE = 30L * 86400000L;
     private ReleasePolicy() {}
     public static int compare(String left, String right) {

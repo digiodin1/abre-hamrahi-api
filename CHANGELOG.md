@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.7 - 2026-11-18
+
+- Renew expired access before checking quota on Windows and show the outcome next to the refresh button.
+- Give due daily syncs priority and keep their time windows and retries independent of instant syncs.
+- Add a manual capacity check to Android and clear its cached figures when changing accounts.
+
+## 1.7.6 - 2026-11-18
+
+- Open the Abre Hamrahi website from the header logo on Windows and Android.
+- Keep the local panel open in its own tab; Android handles a missing browser gracefully.
+
 ## 1.7.5 - 2026-11-16
 
 - Added in-app GitHub release checking and update installation flow.

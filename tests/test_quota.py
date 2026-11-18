@@ -1,9 +1,12 @@
+import io
+import json
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from hamrahi_backup.engine import BackupError, BackupManager, HamrahiClient
 from test_engine import FakeCloud
@@ -40,14 +43,14 @@ class QuotaTests(unittest.TestCase):
             self.assertTrue(self.manager.state['busy'])
             self.assertEqual(self.manager.state['bytes'], 123)
             self.assertTrue(self.manager.work_lock.locked())
-            self.cloud.quota.assert_called_once_with(refresh=False)
+            self.cloud.quota.assert_called_once_with(background=True)
             self.assertFalse(self.manager.public()['state']['quotaStale'])
         finally:
             self.manager.work_lock.release()
 
     def test_overlapping_requests_are_coalesced(self):
         entered = threading.Event()
-        def quota(refresh=True):
+        def quota(*, background=False):
             entered.set()
             self.gate.wait(2)
             return self.cloud.connection()
@@ -92,7 +95,7 @@ class QuotaTests(unittest.TestCase):
 
     def test_response_for_old_session_cannot_repopulate_current_account(self):
         entered = threading.Event()
-        def quota(refresh=True):
+        def quota(*, background=False):
             entered.set()
             self.gate.wait(2)
             return {'used': 999, 'total': 1000}
@@ -123,13 +126,35 @@ class QuotaTests(unittest.TestCase):
 
 
 class ProviderQuotaTests(unittest.TestCase):
-    def test_quota_uses_only_provider_account_totals_and_does_not_refresh_tokens(self):
-        client = object.__new__(HamrahiClient)
-        client._json_once = Mock(return_value={'used': 750, 'total_plan': 1000, 'total_gift': 200})
-        quota = client.quota(refresh=False)
-        self.assertEqual(quota['used'], 750)
-        self.assertEqual(quota['total'], 1200)
-        client._json_once.assert_called_once_with('GET', 'v5/rgw/get-quota/', retry=False)
+    def test_background_quota_recovers_expired_access_and_publishes_expanded_capacity(self):
+        with tempfile.TemporaryDirectory() as temp, patch('hamrahi_backup.engine.protect', side_effect=lambda data: data):
+            client = HamrahiClient(Path(temp))
+            client.save_tokens({'access': 'expired', 'refresh': 'still-valid'})
+            identity = client.session_identity
+            def open_request(request, timeout):
+                if request.get_method() == 'POST':
+                    self.assertTrue(request.full_url.endswith('/token-refresh/'))
+                    self.assertEqual(json.loads(request.data), {'refresh': 'still-valid'})
+                    return io.BytesIO(b'{"access":"renewed"}')
+                self.assertTrue(request.full_url.endswith('/get-quota/'))
+                if request.get_header('Authorization') == 'Bearer expired':
+                    raise HTTPError(request.full_url, 401, 'expired', {}, io.BytesIO(b'{}'))
+                self.assertEqual(request.get_header('Authorization'), 'Bearer renewed')
+                return io.BytesIO(b'{"used":750,"total_plan":1000,"total_gift":200}')
+            client.opener = Mock()
+            client.opener.open.side_effect = open_request
+            manager = BackupManager(Path(temp), client)
+            try:
+                self.assertTrue(manager.refresh_quota(force=True)['started'])
+                manager.quota_thread.join(3)
+                self.assertFalse(manager.quota_thread.is_alive())
+                self.assertEqual(client.opener.open.call_count, 3)
+                self.assertIs(client.session_identity, identity)
+                self.assertEqual(manager.state['connection']['used'], 750)
+                self.assertEqual(manager.state['connection']['total'], 1200)
+                self.assertFalse(manager.public()['state']['quotaStale'])
+            finally:
+                manager.close()
 
     def test_invalid_provider_numbers_do_not_become_zero_capacity(self):
         client = object.__new__(HamrahiClient)
@@ -137,4 +162,4 @@ class ProviderQuotaTests(unittest.TestCase):
             with self.subTest(value=invalid):
                 client._json_once = Mock(return_value={'used': invalid, 'total_plan': 1000, 'total_gift': 0})
                 with self.assertRaises(BackupError):
-                    client.quota(refresh=False)
+                    client.quota(background=True)

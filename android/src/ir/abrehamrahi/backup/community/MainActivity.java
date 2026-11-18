@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.TimePickerDialog;
 import android.content.Intent;
+import android.content.ActivityNotFoundException;
 import android.content.pm.PackageManager;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -199,6 +200,14 @@ public final class MainActivity extends Activity {
         if (!isFinishing() && !isDestroyed()) new AlertDialog.Builder(this).setMessage(message).setPositiveButton("باشه", null).show();
     }
 
+    private void openCloud() {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://abrehamrahi.ir/drive/files")));
+        } catch (ActivityNotFoundException error) {
+            alert("مرورگری برای بازکردن سایت پیدا نشد.");
+        }
+    }
+
     private void show(String selected) {
         page = selected;
         status = null; reports = null; progress = null; counts = null; current = null; quotaDetail = null;
@@ -208,10 +217,16 @@ public final class MainActivity extends Activity {
         screen.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         screen.setBackgroundColor(Color.rgb(246, 249, 252));
         TextView title = new TextView(this);
-        title.setText("Abre Hamrahi API · 1.7.5");
+        title.setText("Abre Hamrahi API · " + ReleasePolicy.VERSION);
         title.setTypeface(bold);
         title.setTextColor(Color.WHITE); title.setTextSize(21); title.setPadding(dp(20), dp(24), dp(20), dp(18));
         title.setBackground(surface(Color.rgb(16, 92, 137), 0));
+        android.graphics.drawable.Drawable logo = getDrawable(R.drawable.cloud);
+        logo.setBounds(0, 0, dp(36), dp(36));
+        title.setCompoundDrawablesRelative(logo, null, null, null);
+        title.setCompoundDrawablePadding(dp(12));
+        title.setContentDescription("Abre Hamrahi API؛ بازکردن سایت ابرهمراهی");
+        title.setOnClickListener(view -> openCloud());
         screen.addView(title);
         ScrollView navigation = new ScrollView(this);
         LinearLayout tabs = new LinearLayout(this);
@@ -254,6 +269,10 @@ public final class MainActivity extends Activity {
             gauges.addView(volumeGauge, new LinearLayout.LayoutParams(0, dp(220), 1));
             content.addView(gauges);
             quotaDetail = text("");
+            button("بررسی ظرفیت", () -> run(() -> {
+                long[] quota = store.updateQuota(new Cloud(store));
+                return "ظرفیت به‌روز شد؛ " + SyncPlan.bytes(Math.max(0, quota[1] - quota[0]), 2) + " فضای آزاد.";
+            }));
             status = text(store.preferences.getString("status", "آماده"));
             status.setTypeface(bold); status.setTextColor(Color.rgb(22, 76, 112)); status.setBackground(surface(Color.WHITE, 14));
             progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -264,7 +283,7 @@ public final class MainActivity extends Activity {
             button("سینک / تلاش مجدد", () -> start(false));
             button("شروع پایش تغییرات", this::automatic);
             button("توقف همگام‌سازی", this::stop);
-            button("بازکردن ابر", () -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://abrehamrahi.ir/drive/files"))));
+            button("بازکردن ابر", this::openCloud);
         }
     }
 
@@ -311,7 +330,7 @@ public final class MainActivity extends Activity {
                 payload.put("country", "IR");
                 JSONObject tokens = cloud.json("POST", "v6/profile/auth/login/", payload, false);
                 if (tokens.optBoolean("is_registered")) return "ثبت‌نام را در سایت رسمی کامل کنید.";
-                store.saveSession(tokens);
+                store.login(tokens);
                 return "ورود انجام شد؛ نشست در این گوشی رمزگذاری شد.";
             });
         });
@@ -320,6 +339,7 @@ public final class MainActivity extends Activity {
             return "اتصال حساب موفق بود.";
         }));
         button("خروج از حساب", () -> {
+            if (operation) { alert("تا پایان بررسی جاری صبر کنید."); return; }
             stop();
             if (Backup.RUNNING.get()) { alert("پس از توقف عملیات، دوباره خروج را بزنید."); return; }
             store.logout(); alert("نشست محلی حذف شد؛ فایل‌های ابری باقی هستند.");

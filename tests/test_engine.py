@@ -32,7 +32,7 @@ class FakeCloud:
     def connection(self):
         return {'checkedAt': cb.now(), 'used': 0, 'total': 100000000}
 
-    def quota(self, refresh=True):
+    def quota(self, *, background=False):
         return self.connection()
 
     def list_folder(self, parent=None):

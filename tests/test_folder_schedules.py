@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from hamrahi_backup.engine import BackupError, BackupManager
 from test_engine import FakeCloud
@@ -24,7 +24,7 @@ class FolderScheduleTests(unittest.TestCase):
         self.manager.save_config(self.manager.config | {
             'automatic': True, 'settleSeconds': 0,
             'folders': [{'path': str(self.instant)},
-                        {'path': str(self.daily), 'syncMode': 'daily', 'dailyTime': '03:15'}]})
+                        {'path': str(self.daily), 'syncMode': 'daily', 'dailyTime': '03:15', 'dailyEndTime': '03:15'}]})
         self.instant_id, self.daily_id = [job['id'] for job in self.manager.config['folders']]
 
     def tearDown(self):
@@ -101,9 +101,21 @@ class FolderScheduleTests(unittest.TestCase):
         self.wait()
         self.assertEqual(self.cloud.uploads, uploads)
 
-    def test_simultaneously_due_folders_run_once_and_acknowledge_instant_changes(self):
+    def test_daily_takes_priority_and_keeps_its_end_when_interval_is_due(self):
         self.instant_due()
+        self.manager.state['nextRun'] = time.time() - 1
+        self.manager.retry_at = time.time() + 300
         self.daily_due()
+        self.manager.scheduler_tick()
+        self.wait()
+        self.assertEqual(self.payloads(), [b'daily payload'])
+        self.assertEqual(self.manager.state['trigger'], 'daily')
+        _, _, end = self.manager.in_daily_window(self.manager.config['folders'][1])
+        self.assertEqual(self.manager.active_window_end, end)
+        with patch('hamrahi_backup.engine.time.time', return_value=end):
+            with self.assertRaises(BackupError):
+                self.manager.cancelled()
+        self.manager.retry_at = 0
         self.manager.scheduler_tick()
         self.wait()
         self.assertCountEqual(self.payloads(), [b'instant payload', b'daily payload'])
@@ -130,9 +142,10 @@ class FolderScheduleTests(unittest.TestCase):
         self.manager.scheduler_tick()
         self.wait()
         self.assertLess(self.manager.folder_schedules[self.daily_id], time.time())
-        self.assertGreater(self.manager.retry_at, time.time())
+        self.assertGreater(self.manager.daily_retries[self.daily_id][0], time.time())
+        self.assertEqual(self.manager.retry_at, 0)
         self.cloud.upload = original
-        self.manager.retry_at = 0
+        self.manager.daily_retries.clear()
         self.manager.scheduler_tick()
         self.wait()
         self.assertEqual(self.payloads(), [b'daily payload'])
@@ -159,15 +172,14 @@ class FolderScheduleTests(unittest.TestCase):
         self.cloud.upload = fail_instant
         self.manager.scheduler_tick()
         self.wait()
-        self.assertFalse(self.manager.state['lastResult']['ok'])
+        self.assertTrue(self.manager.state['lastResult']['ok'])
         self.assertGreater(self.manager.folder_schedules[self.daily_id], time.time())
         self.assertEqual(self.payloads(), [b'daily payload'])
         self.assertIn(self.daily_id, self.manager.state['lastResult']['completedJobs'])
         self.assertNotIn(self.instant_id, self.manager.state['lastResult']['completedJobs'])
-        self.manager.retry_at = 0
-        self.instant_due()
         self.manager.scheduler_tick()
         self.wait()
+        self.assertFalse(self.manager.state['lastResult']['ok'])
         self.assertNotIn(self.daily_id, self.manager.state['lastResult']['completedJobs'])
 
     def test_manual_sync_includes_daily_folders_before_their_scheduled_time(self):
@@ -205,6 +217,24 @@ class FolderScheduleTests(unittest.TestCase):
                          (current + timedelta(days=1)).timestamp())
         before = current - timedelta(seconds=1)
         self.assertEqual(self.manager.next_daily_run('03:15', before.timestamp()), current.timestamp())
+
+    def test_scheduled_window_opens_at_configured_minute_and_stays_closed_after_end(self):
+        job = self.manager.config['folders'][1]
+        job.update(dailyTime='22:02', dailyEndTime='23:59')
+        start = datetime(2026, 11, 18, 22, 2).timestamp()
+        end = datetime(2026, 11, 18, 23, 59).timestamp()
+        self.manager.folder_schedules[self.daily_id] = start
+        self.manager.start = Mock()
+        self.manager.change_due = self.manager.state['nextRun'] = end + 3600
+        with patch('hamrahi_backup.engine.time.time', return_value=start - 1):
+            self.manager.scheduler_tick()
+        self.manager.start.assert_not_called()
+        with patch('hamrahi_backup.engine.time.time', return_value=start):
+            self.manager.scheduler_tick()
+        self.manager.start.assert_called_once_with('sync', trigger='daily', only_jobs={self.daily_id})
+        with patch('hamrahi_backup.engine.time.time', return_value=end):
+            self.manager.scheduler_tick()
+        self.assertEqual(self.manager.start.call_count, 1)
 
     def test_daily_window_supports_overnight_and_daytime_ranges(self):
         overnight = self.manager.config['folders'][1] | {'dailyTime': '20:00', 'dailyEndTime': '08:00'}

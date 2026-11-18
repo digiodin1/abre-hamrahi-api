@@ -244,8 +244,22 @@ public final class CloudChecks {
 
     public static void main(String[] args) throws Exception {
         updatePolicy();
-        namesAndDestinations(); folders(); currentVersions(); transfers(); refreshAndAmbiguousMove(); schedulesAndTrash();
+        namesAndDestinations(); folders(); currentVersions(); transfers(); refreshAndAmbiguousMove(); schedulesAndTrash(); quotas();
         System.out.println("Android policy and cloud adapter checks passed: " + assertions + " assertions; no real account or network.");
+    }
+
+    private static void quotas() throws Exception {
+        String route = "v5/rgw/get-quota/";
+        Fixture expanded = new Fixture();
+        expanded.add(route, 401, "{}");
+        expanded.add("v2/profile/auth/token-refresh/", 200, "{\"access\":\"renewed\"}");
+        Reply latest = expanded.add(route, 200, "{\"used\":10737418239,\"total_plan\":214748364800,\"total_gift\":10737418240}");
+        long[] values = expanded.cloud().quota();
+        expect("Bearer renewed".equals(latest.getRequestProperty("Authorization")), "Quota retry used the expired access token");
+        expect(values[0] == 10737418239L && values[1] == 225485783040L, "Quota lost 64-bit capacity or gift space");
+        Fixture invalid = new Fixture();
+        invalid.add(route, 200, "{\"used\":0,\"total_plan\":9223372036854775807,\"total_gift\":1}");
+        rejected(() -> invalid.cloud().quota());
     }
 
     private static void updatePolicy() throws Exception {

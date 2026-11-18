@@ -15,3 +15,5 @@ Changes to the provider adapter must state which observed request or response sh
 The public panel must remain loopback-only. Do not add CORS, remote JavaScript, arbitrary file serving, telemetry, automatic startup installation, or code downloaded and executed from the network.
 
 Use focused commits and explain user-visible behavior in the pull request. The GitHub Actions workflow is the minimum required check; maintainers may add a Windows manual smoke test before a release.
+
+For stable versions, follow the [Persian release checklist](docs/releases.fa.md): publish the Windows and signed Android packages together with Persian release notes and installation instructions.

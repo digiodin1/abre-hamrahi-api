@@ -91,7 +91,7 @@ function renderFolders(force=false) {
 }
 function folderScheduleLabel(folder, index) {
   const daily = folder.syncMode === 'daily', schedule = model?.state.folderSchedules?.[folder.id];
-  const next = daily && schedule?.nextRun && schedule.dailyTime === folder.dailyTime ? `نوبت بعد: ${date(schedule.nextRun*1000)}` : '';
+  const next = daily && schedule?.nextRun && schedule.dailyTime === folder.dailyTime ? `نوبت بعد: ${date(Math.max(schedule.nextRun,schedule.retryAt||0)*1000)}` : '';
   return `<div class="folder-schedule"><label>زمان‌بندی<select data-folder-mode="${index}" aria-label="زمان‌بندی ${esc(folder.name)}"><option value="instant" ${daily?'':'selected'}>سینک آنی</option><option value="daily" ${daily?'selected':''}>سینک روزانه</option></select></label><label ${daily?'':'hidden'}>شروع بازه<input type="time" data-folder-time="${index}" value="${esc(folder.dailyTime || '02:00')}" required aria-label="شروع بازهٔ سینک ${esc(folder.name)}"></label><label ${daily?'':'hidden'}>پایان بازه<input type="time" data-folder-end="${index}" value="${esc(folder.dailyEndTime || '23:59')}" required aria-label="پایان بازهٔ سینک ${esc(folder.name)}"></label><span class="next-run">${esc(next)}</span></div>`;
 }
 function folderSizeLabel(folder) {
@@ -111,17 +111,21 @@ function setGauge(name, percent) {
   if (known) $(name+'-gauge').setAttribute('aria-valuenow',value); else $(name+'-gauge').removeAttribute('aria-valuenow');
 }
 function renderGauges(state) {
-  const connection = state.connection, known = connection && connection.total > 0;
+  const connection = model.authenticated ? state.connection : null, known = connection && connection.total > 0;
   const remaining = known ? Math.max(0,connection.total-connection.used) : null;
   const freePercent = known ? remaining/connection.total*100 : null;
   setGauge('capacity',freePercent);
   $('capacity-value').textContent = known ? size(remaining,2) : '—';
   $('capacity-value').title = known ? nf.format(remaining)+' بایت آزاد' : '';
   $('capacity-percent').textContent = known ? nf.format(Math.round(freePercent*100)/100)+'٪ آزاد' : 'ظرفیت بررسی نشده';
-  const freshness = state.quotaError || (state.quotaRefreshing ? 'در حال دریافت ظرفیت' : state.quotaStale ? 'عدد آخرین بررسی؛ نیاز به به‌روزرسانی' : '');
+  const freshness = state.quotaRefreshing ? 'در حال دریافت ظرفیت…' : state.quotaError || (known && state.quotaStale ? 'عدد آخرین بررسی؛ نیاز به به‌روزرسانی' : '');
   const usedPercent = known ? nf.format(Math.round(connection.used/connection.total*10000)/100) : '';
   const checkedAt = connection?.checkedAt ? new Date(connection.checkedAt).toLocaleString('fa-IR',{dateStyle:'short',timeStyle:'medium'}) : '—';
   $('capacity-detail').textContent = (known ? `مصرف‌شده: ${size(connection.used,2)} از ${size(connection.total,2)} (${usedPercent}٪) · بررسی: ${checkedAt}` : 'ظرفیت هنوز دریافت نشده.') + (freshness ? ` · ${freshness}` : '');
+  const quotaStatus = $('quota-status');
+  quotaStatus.textContent = !model.authenticated ? (model.error || '') : freshness ||
+    (connection ? `ظرفیت به‌روز شد؛ ${size(Math.max(0,connection.total-connection.used),2)} فضای آزاد · ${checkedAt}` : '');
+  quotaStatus.classList.toggle('bad', !state.quotaRefreshing && !!(state.quotaError || (!model.authenticated && model.error)));
   const match = model.syncMatch || {}, percent = Number.isFinite(match.percent) ? match.percent : null;
   setGauge('activity',percent);
   $('activity-value').textContent = Number.isFinite(percent) ? nf.format(match.complete ? 100 : Math.min(99.99, Math.round(percent*100)/100))+'٪' : '—';
@@ -201,7 +205,7 @@ function render() {
   renderGauges(s);
   renderFolders();
   const previousErrors = s.busy && s.lastResult && !s.lastResult.ok ? s.lastResult.errors.map(text => 'خطای نوبت قبل: ' + text) : [];
-  errorParagraphs($('errors'), [...new Set([...(model.error?[model.error]:[]), ...(s.watchError?[s.watchError]:[]), ...s.errors, ...previousErrors])]);
+  errorParagraphs($('errors'), [...new Set([...(model.error?[model.error]:[]), ...(s.watchError?[s.watchError]:[]), ...(s.scheduleError?[s.scheduleError]:[]), ...s.errors, ...previousErrors])]);
   const result = s.lastResult;
   $('result').textContent = result ? `${result.audit?'آخرین بررسی صحت':result.preview?'پیش‌نمایش':'آخرین ارسال'} · ${date(result.at)} · ${nf.format(result.excluded)} استثنا` : '';
   const run = s.busy ? s.runId : result?.id;
@@ -341,7 +345,8 @@ for(const [id,action] of [['preview','preview'],['sync','sync'],['audit','audit'
   if(dirty) await save(); await api(action); showPage('run'); message('عملیات شروع شد.');
 });
 $('check-connection').onclick=()=>perform($('check-connection'),async()=>{
-  await api('connection'); message('ظرفیت حساب در حال به‌روزرسانی است.');
+  $('quota-status').textContent = 'در حال دریافت ظرفیت…';
+  await api('connection');
 });
 document.addEventListener('click',event=>{
   const folderButton=event.target.closest('[data-folder-files],[data-folder-next],[data-folder-prev]');
