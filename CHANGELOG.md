@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.8 - 2026-11-22
+
+- Windows daily runs can reuse unchanged file fingerprints when the current cloud ID and size still match and full verification is off.
+- On expiry of a daily window, retain successful transfers and report remaining queue entries as deferred separately from actual file errors.
+- Show run start and finish, and avoid displaying stopped measurements as in progress.
+- Android build is versioned alongside Windows; its sync logic is unchanged in this release.
+
 ## 1.7.7 - 2026-11-18
 
 - Renew expired access before checking quota on Windows and show the outcome next to the refresh button.

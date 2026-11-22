@@ -80,7 +80,12 @@ def folder_summaries(manager):
     volume_scope = volume_stamp(manager.config)
     fresh = (getattr(manager, 'audit_generation', None) == manager.change_generation
              and not manager.state['busy'] and not manager.state.get('pendingSync'))
-    return {job['id']: saved[job['id']] | {'stale': not fresh or
+    active_run = manager.state.get('runId') if manager.state['busy'] else None
+    for job_id, summary in saved.items():
+        if summary.get('inProgress') and (not active_run or summary.get('run') != active_run):
+            saved[job_id] = summary | {'inProgress': False}
+    return {job['id']: saved[job['id']] | {
+            'stale': not fresh or
             saved[job['id']].get('configStamp') != stamp,
             'scopeChanged': (saved[job['id']]['volumeStamp'] != volume_scope
                 if 'volumeStamp' in saved[job['id']] else saved[job['id']].get('configStamp') != stamp)} for job in manager.config['folders']

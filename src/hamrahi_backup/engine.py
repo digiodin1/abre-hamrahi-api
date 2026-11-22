@@ -48,6 +48,11 @@ class BackupError(Exception):
         self.captcha = captcha
 
 
+class SyncWindowEnded(BackupError):
+    def __init__(self):
+        super().__init__('بازهٔ سینک روزانه تمام شد؛ فایل‌های باقی‌مانده در نوبت بعد بررسی می‌شوند.')
+
+
 def now():
     return dt.datetime.now().astimezone().isoformat(timespec='seconds')
 
@@ -949,7 +954,7 @@ class BackupManager:
 
     def finish_result(self, result):
         result['completedAt'] = now()
-        result['ok'] = not result['errors']
+        result['ok'] = not result['errors'] and not result.get('windowEnded', False)
         with self.lock:
             self.history = [h for h in self.history if h.get('id') != result['id']]
             self.history.insert(0, result)
@@ -1110,6 +1115,8 @@ class BackupManager:
                 self.daily_retries.pop(job['id'], None)
                 with self.db() as db:
                     db.execute('UPDATE folder_schedules SET next_run=? WHERE job=?', (deadline, job['id']))
+            elif not active:
+                self.daily_retries.pop(job['id'], None)
             deadlines.append(max(deadline, self.daily_retries.get(job['id'], (0, 0))[0]))
         ready = (self.config['automatic'] and not self.config['automaticPaused'] and
                  bool(self.client.tokens) and not self.config_error and not self.state['busy'] and
@@ -1163,24 +1170,32 @@ class BackupManager:
                     succeeded = bool(self.state['lastResult'] and self.state['lastResult']['ok'])
             except Exception as error:
                 message = str(error) if isinstance(error, BackupError) else 'عملیات ناموفق بود؛ فایل موفق ثبت نشد. نوع خطا: ' + type(error).__name__
-                self.update(phase='عملیات ناموفق', errors=[message])
+                window_ended = isinstance(error, SyncWindowEnded)
+                self.update(phase=(message if window_ended else 'عملیات ناموفق'),
+                            **({} if window_ended else {'errors': [message]}))
                 with self.lock:
                     for item in self.state['steps']:
                         if item['status'] == 'running':
-                            item['status'] = 'error'
+                            item['status'] = 'deferred' if window_ended else 'error'
                 if action == 'test':
                     self.update(lastTest={'at': now(), 'ok': False, 'message': message})
                 if action in ('sync', 'preview', 'audit'):
                     with self.lock:
                         failed = self.active_result or {'id': uuid.uuid4().hex, 'at': now(), 'preview': action == 'preview', 'ok': False,
                                   'uploaded': self.state['uploaded'], 'unchanged': self.state['skipped'],
-                                  'bytes': self.state['bytes'], 'errors': [message], 'samples': [],
+                                  'bytes': self.state['bytes'], 'errors': [] if window_ended else [message], 'samples': [],
                                   'excluded': 0, 'files': 0, 'manifests': []}
-                        if message not in failed['errors']:
+                        if window_ended:
+                            failed.update(windowEnded=True, continuation=message)
+                        elif message not in failed['errors']:
                             failed['errors'].append(message)
                         with self.db() as db:
                             transient = isinstance(error, BackupError) and error.status in (429, 502, 503, 504)
-                            if transient:
+                            if window_ended:
+                                update = db.execute("UPDATE run_items SET status='deferred',error=? WHERE run=? AND status IN ('queued','processing')",
+                                                    (message, failed['id']))
+                                failed['deferred'] = update.rowcount
+                            elif transient:
                                 db.execute("UPDATE run_items SET status='deferred',error=? WHERE run=? AND status='queued'",
                                            ('این فایل هنوز بررسی نشده؛ در انتظار ادامه پس از رفع خطای سرویس. علت: ' + message, failed['id']))
                             db.execute("UPDATE run_items SET status='error',error=? WHERE run=? AND status IN ('queued','processing')",
@@ -1196,7 +1211,7 @@ class BackupManager:
                             self.complete_daily_schedules(completed_jobs)
                             if trigger == 'daily':
                                 for job in (only_jobs or set()) - completed_jobs:
-                                    if job in self.folder_schedules:
+                                    if job in self.folder_schedules and not (self.active_result or {}).get('windowEnded'):
                                         attempt = min(7, self.daily_retries.get(job, (0, 0))[1] + 1)
                                         self.daily_retries[job] = (time.time() + min(300, 5 * 2 ** (attempt - 1)), attempt)
                         if succeeded and covers_instant and (not only_paths or trigger == 'change'):
@@ -1223,8 +1238,7 @@ class BackupManager:
         if self.stop.is_set():
             raise BackupError('کار با درخواست شما متوقف شد؛ فایل‌های موفق حفظ شدند.')
         if self.active_window_end is not None and time.time() >= self.active_window_end:
-            self.stop.set()
-            raise BackupError('بازهٔ مجاز این سینک به پایان رسید؛ ادامهٔ فایل‌ها در نوبت بعد انجام می‌شود.')
+            raise SyncWindowEnded()
 
     def walk(self, root, config, errors, skips, on_error=None, only_paths=None, empty_directories=None):
         def failure(path, message):
@@ -1331,6 +1345,7 @@ class BackupManager:
         run = uuid.uuid4().hex
         result = {'id': run, 'at': now(), 'preview': preview, 'uploaded': 0, 'unchanged': 0, 'bytes': 0,
                   'files': 0, 'errors': [], 'excluded': 0, 'samples': [], 'manifests': [], 'completedJobs': [],
+                  'trigger': self.state.get('trigger'), 'jobs': [job['id'] for job in folders],
                   'retry': bool(only_paths) and self.state.get('trigger') != 'change',
                   'partial': bool(only_paths)}
         self.active_result = result
@@ -1483,9 +1498,9 @@ class BackupManager:
                         old = indexed.get(relative.as_posix())
                         previous = fingerprints.get(relative.as_posix())
                         fast = False
-                        if (old and previous and not previous[4] and tuple(previous[:4]) == source_before
+                        if (old and old[2] == path.name and previous and not previous[4] and tuple(previous[:4]) == source_before
                                 and not preview and not only_paths and not config['verifyUploads']
-                                and self.state.get('trigger') in ('change', 'schedule')):
+                                and result['trigger'] in ('change', 'schedule', 'daily')):
                             with preparation_lock:
                                 parent = remote_parent(job, relative)
                                 remote = layout.listing(parent).get(path.name)
@@ -1501,9 +1516,9 @@ class BackupManager:
                         if config['maxFileMiB'] and size > config['maxFileMiB'] * 1048576:
                             raise BackupError('snapshot از سقف اندازه بزرگ‌تر است: ' + str(path))
                         filename = path.name
-                        object_id, exists = None, False
+                        object_id, exists = (old[1], True) if fast else (None, False)
                         replacement = None
-                        if not preview:
+                        if not preview and not fast:
                             with preparation_lock:
                                 parent = remote_parent(job, relative)
                                 if parent not in remote_cache:
@@ -1554,7 +1569,7 @@ class BackupManager:
                                     verify_object(self, object_id, digest, size, uploaded)
                                 with preparation_lock:
                                     remote_cache[parent][filename] = uploaded
-                        else:
+                        elif preview:
                             exists = bool(old and old[0] == digest)
                         with result_lock:
                             entry = {'path': relative.as_posix(), 'sha256': digest, 'size': size,
@@ -1592,7 +1607,7 @@ class BackupManager:
                             with outage_lock:
                                 outage_failures = 0
                     except (OSError, sqlite3.Error, BackupError) as error:
-                        if self.stop.is_set():
+                        if isinstance(error, SyncWindowEnded) or self.stop.is_set():
                             raise
                         message = str(error) if isinstance(error, BackupError) else 'خواندن یا snapshot فایل ناموفق بود: ' + str(path)
                         self.record_item(run, path, 'error', self.file_size(path), error=message)
@@ -1651,15 +1666,16 @@ class BackupManager:
                                    (json.dumps(summary), job['id']))
                     with self.lock:
                         self.live_folder_stats.pop(job['id'], None)
-                manifests.append((job, manifest, not scan_failed and len(result['errors']) == job_errors_before))
+                complete = not scan_failed and len(result['errors']) == job_errors_before
+                if not preview and config['syncBehavior'] == 'mirror':
+                    if complete:
+                        result['completedJobs'].append(job['id'])
+                else:
+                    manifests.append((job, manifest, complete))
             self.step('transfer', 'error' if result['errors'] else 'ok')
             self.step('manifest')
             for job, manifest, complete in manifests:
                 if not preview:
-                    if config['syncBehavior'] == 'mirror':
-                        if complete:
-                            result['completedJobs'].append(job['id'])
-                        continue
                     self.cancelled()
                     self.update(phase='ذخیرهٔ فهرست بازیابی', current=job['path'], fileStage=None)
                     manifest_file = Path(staging) / 'manifest.json'

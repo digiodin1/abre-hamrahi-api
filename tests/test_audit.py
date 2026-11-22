@@ -40,6 +40,7 @@ class AuditTests(unittest.TestCase):
         self.manager = engine.BackupManager(self.base, self.cloud)
         restored = self.summary()
         self.assertEqual(restored['cloudBytes'], 15)
+        self.assertFalse(restored['inProgress'])
         self.assertEqual(restored['localTotalBytes'], 15)
         self.assertEqual(restored['measuredAt'], expected['measuredAt'])
         self.assertEqual(self.manager.public()['syncMatch']['percent'], 100)
@@ -52,7 +53,8 @@ class AuditTests(unittest.TestCase):
         with patch.object(audit, 'capture_synced_folder', side_effect=engine.BackupError('synthetic outage')):
             with self.assertRaises(engine.BackupError):
                 self.manager.sync()
-        self.assertTrue(self.summary()['inProgress'])
+        self.assertFalse(self.summary()['inProgress'])
+        self.assertEqual(self.summary()['cloudBytes'], 3)
         (self.source / 'missing.txt').write_bytes(b'missing')
         audit.audit_folders(self.manager)
         self.assertEqual(self.summary()['localTotalBytes'], 10)

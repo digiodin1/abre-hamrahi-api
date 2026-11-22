@@ -106,10 +106,12 @@ class CompleteSyncTests(unittest.TestCase):
         for number in range(70):
             (self.source / f'{number}.txt').write_bytes(b'data')
         self.manager.sync()
-        self.manager.state['trigger'] = 'schedule'
-        with patch.object(self.manager, 'snapshot', wraps=self.manager.snapshot) as snapshot:
-            self.manager.sync()
-        snapshot.assert_not_called()
+        for trigger in ('schedule', 'daily'):
+            with self.subTest(trigger=trigger):
+                self.manager.state['trigger'] = trigger
+                with patch.object(self.manager, 'snapshot', wraps=self.manager.snapshot) as snapshot:
+                    self.manager.sync()
+                snapshot.assert_not_called()
         self.assertEqual(self.manager.state['lastResult']['unchanged'], 70)
         self.assertEqual(self.manager.public()['state']['progress']['percent'], 100)
         self.assertEqual(self.manager.items({'run': self.manager.state['lastResult']['id']})['total'], 70)

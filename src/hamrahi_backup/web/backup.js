@@ -101,7 +101,7 @@ function folderSizeLabel(folder) {
 function folderAuditLabel(folder) {
   const stats = model?.folderStats?.[folder.id];
   if (!stats) return '';
-  const label = stats.stale ? 'نیاز به بررسی دوباره' : stats.complete ? '✓ تطابق فایل‌های مجاز تأیید شد' : `✕ ${nf.format(stats.issues)} مورد نیازمند رسیدگی`;
+  const label = stats.inProgress ? 'در حال بررسی و همگام‌سازی' : stats.stale ? (stats.complete ? 'تطابق در آخرین بررسی تأیید شد' : 'اندازه‌گیری قبلی؛ تطابق کامل تأیید نشده') : stats.complete ? '✓ تطابق فایل‌های مجاز تأیید شد' : stats.issues ? `✕ ${nf.format(stats.issues)} مورد نیازمند رسیدگی` : 'تطابق کامل تأیید نشده';
   return `<p class="${stats.stale?'muted':stats.complete?'success':'bad'}">${label} · ${nf.format(stats.verifiedFiles)} از ${nf.format(stats.localFiles)} فایل · ${date(stats.checkedAt)}</p><p class="muted">حجم فایل‌های مجاز: ${size(stats.localBytes)} · ${nf.format(stats.excluded)} مسیر مستثنا${stats.cloudExtras ? ` · ${nf.format(stats.cloudExtras)} فایل اضافه در ابر، حفظ‌شده` : ''}${stats.sizeUnreadable ? ` · حجم ${nf.format(stats.sizeUnreadable)} مسیر قابل خواندن نبود` : ''}${stats.contentVerifiedAt ? ` · قدیمی‌ترین تأیید محتوای نسخه‌های فعلی: ${date(stats.contentVerifiedAt*1000)}` : ''}</p>`;
 }
 function setGauge(name, percent) {
@@ -165,7 +165,7 @@ function errorParagraphs(container, errors) {
 function renderProgress(s) {
   $('phase').textContent = s.phase;
   $('current').textContent = s.current || '';
-  const icon = status => status === 'ok' ? '✓' : status === 'error' ? '✕' : status === 'running' ? '<span class="spinner"></span>' : '○';
+  const icon = status => status === 'ok' ? '✓' : status === 'error' ? '✕' : status === 'deferred' ? '◷' : status === 'running' ? '<span class="spinner"></span>' : '○';
   $('progress-steps').innerHTML = (s.steps || []).map(step => `<li class="stage ${esc(step.status)}"><span>${icon(step.status)}</span>${esc(step.label)}</li>`).join('');
   const stages = [['snapshot','نسخهٔ موقت'], ...(s.action === 'audit' ? [['verify','بررسی صحت']] : s.action !== 'preview' ? [['upload','ارسال'], ...(model.config.verifyUploads ? [['verify','بررسی صحت']] : [])] : []), ['record','ثبت']];
   const current = stages.findIndex(step => step[0] === s.fileStage);
@@ -207,10 +207,10 @@ function render() {
   const previousErrors = s.busy && s.lastResult && !s.lastResult.ok ? s.lastResult.errors.map(text => 'خطای نوبت قبل: ' + text) : [];
   errorParagraphs($('errors'), [...new Set([...(model.error?[model.error]:[]), ...(s.watchError?[s.watchError]:[]), ...(s.scheduleError?[s.scheduleError]:[]), ...s.errors, ...previousErrors])]);
   const result = s.lastResult;
-  $('result').textContent = result ? `${result.audit?'آخرین بررسی صحت':result.preview?'پیش‌نمایش':'آخرین ارسال'} · ${date(result.at)} · ${nf.format(result.excluded)} استثنا` : '';
+  $('result').textContent = result ? `${result.audit?'آخرین بررسی صحت':result.preview?'پیش‌نمایش':result.trigger==='daily'?'همگام‌سازی روزانه':'آخرین ارسال'} · ${date(result.at)} · ${nf.format(result.excluded)} استثنا${result.continuation ? ' · '+result.continuation : ''}` : '';
   const run = s.busy ? s.runId : result?.id;
   if (views.run.run !== run) { views.run.run = run; views.run.offset = 0; }
-  $('history').innerHTML = model.history.length ? `<table><thead><tr><th>زمان</th><th>نوع</th><th>فایل تازه</th><th>بدون تغییر</th><th>حجم</th><th>نتیجه</th></tr></thead><tbody>${model.history.map((h,i)=>`<tr><td><button class="link" data-report="${i}">${date(h.at)}</button></td><td>${h.audit?'بررسی صحت':h.retry?'تلاش مجدد':h.preview?'پیش‌نمایش':'ارسال'}</td><td>${nf.format(h.uploaded)}</td><td>${nf.format(h.unchanged)}</td><td dir="ltr">${size(h.bytes)}</td><td class="${h.ok?'success':'bad'}">${h.ok?'✓ موفق':'✕ '+nf.format(h.errors.length)+' خطا'}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">گزارشی ثبت نشده است.</div>';
+  $('history').innerHTML = model.history.length ? `<table><thead><tr><th>شروع / پایان</th><th>نوع</th><th>فایل تازه</th><th>بدون تغییر</th><th>حجم</th><th>نتیجه</th></tr></thead><tbody>${model.history.map((h,i)=>`<tr><td><button class="link" data-report="${i}">${date(h.at)}</button>${h.completedAt ? '<br>'+date(h.completedAt) : ''}</td><td>${h.audit?'بررسی صحت':h.retry?'تلاش مجدد':h.preview?'پیش‌نمایش':h.trigger==='daily'?'روزانه':'ارسال'}</td><td>${nf.format(h.uploaded)}</td><td>${nf.format(h.unchanged)}</td><td dir="ltr">${size(h.bytes)}</td><td class="${h.ok?'success':h.windowEnded&&!h.errors.length?'muted':'bad'}">${h.ok?'✓ موفق':h.windowEnded?'پایان بازه · '+nf.format(h.deferred||0)+' در انتظار'+(h.errors.length?' · '+nf.format(h.errors.length)+' خطا':''):'✕ '+nf.format(h.errors.length)+' خطا'}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">گزارشی ثبت نشده است.</div>';
   renderControls();
 }
 function ensureUpdateControls() {
@@ -259,7 +259,7 @@ async function poll() {
     model = await response.json();
     if (closing) return;
     if (!initialized) { populate(model.config); initialized = true; }
-    if (lastBusy && !model.state.busy) message(model.state.errors[0] || model.state.phase, !!model.state.errors.length);
+    if (lastBusy && !model.state.busy) message(model.state.lastResult?.continuation || model.state.errors[0] || model.state.phase, !!model.state.errors.length);
     lastBusy = model.state.busy;
     render();
     await loadItems('run');

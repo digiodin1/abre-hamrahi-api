@@ -236,6 +236,48 @@ class FolderScheduleTests(unittest.TestCase):
             self.manager.scheduler_tick()
         self.assertEqual(self.manager.start.call_count, 1)
 
+    def test_window_end_defers_remaining_files_and_next_night_resumes_without_duplicate_upload(self):
+        start = datetime(2026, 11, 22, 22, 2)
+        end = start.replace(hour=23, minute=59).timestamp()
+        job = self.manager.config['folders'][1] | {'dailyTime': '22:02', 'dailyEndTime': '23:59'}
+        self.manager.save_config(self.manager.config | {'verifyUploads': False, 'uploadWorkers': 1, 'folders': [job]})
+        (self.daily / 'b.txt').write_bytes(b'B')
+        (self.daily / 'c.txt').write_bytes(b'C')
+        self.manager.folder_schedules[self.daily_id] = start.timestamp()
+        instant = [start.timestamp()]
+        upload = self.cloud.upload
+        def upload_until_end(path, name, parent, **options):
+            if name == 'b.txt':
+                instant[0] = end
+                options['cancelled']()
+            return upload(path, name, parent, **options)
+        with patch('hamrahi_backup.engine.time.time', side_effect=lambda: instant[0]):
+            with patch.object(self.cloud, 'upload', side_effect=upload_until_end):
+                self.manager.scheduler_tick()
+                self.wait()
+            status = self.manager.public()
+            result = status['state']['lastResult']
+            self.assertFalse(result['ok'])
+            self.assertTrue(result['windowEnded'])
+            self.assertEqual(result['trigger'], 'daily')
+            self.assertEqual(result['jobs'], [self.daily_id])
+            self.assertEqual(result['errors'], [])
+            self.assertEqual(result['uploaded'], 1)
+            self.assertEqual(result['deferred'], 2)
+            self.assertEqual(status['state']['progress']['waiting'], 2)
+            self.assertEqual(status['state']['progress']['failed'], 0)
+            self.assertFalse(status['folderStats'][self.daily_id]['inProgress'])
+            self.assertIsNone(status['state']['folderSchedules'][self.daily_id]['retryAt'])
+            self.manager.scheduler_tick()
+            self.wait()
+            self.assertEqual(self.cloud.uploads, 1)
+            instant[0] = (start + timedelta(days=1)).timestamp()
+            self.manager.scheduler_tick()
+            self.wait()
+        self.assertEqual(self.cloud.uploads, 3)
+        self.assertCountEqual(self.payloads(), [b'daily payload', b'B', b'C'])
+        self.assertTrue(self.manager.state['lastResult']['ok'])
+
     def test_daily_window_supports_overnight_and_daytime_ranges(self):
         overnight = self.manager.config['folders'][1] | {'dailyTime': '20:00', 'dailyEndTime': '08:00'}
         self.assertTrue(self.manager.in_daily_window(overnight, datetime(2026, 11, 16, 7, 59).timestamp())[0])
