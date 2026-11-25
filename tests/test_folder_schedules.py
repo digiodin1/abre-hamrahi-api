@@ -237,7 +237,7 @@ class FolderScheduleTests(unittest.TestCase):
         self.assertEqual(self.manager.start.call_count, 1)
 
     def test_window_end_defers_remaining_files_and_next_night_resumes_without_duplicate_upload(self):
-        start = datetime(2026, 11, 22, 22, 2)
+        start = (datetime.now() + timedelta(days=1)).replace(hour=22, minute=2, second=0, microsecond=0)
         end = start.replace(hour=23, minute=59).timestamp()
         job = self.manager.config['folders'][1] | {'dailyTime': '22:02', 'dailyEndTime': '23:59'}
         self.manager.save_config(self.manager.config | {'verifyUploads': False, 'uploadWorkers': 1, 'folders': [job]})
@@ -277,6 +277,49 @@ class FolderScheduleTests(unittest.TestCase):
         self.assertEqual(self.cloud.uploads, 3)
         self.assertCountEqual(self.payloads(), [b'daily payload', b'B', b'C'])
         self.assertTrue(self.manager.state['lastResult']['ok'])
+
+    def test_daily_window_sends_small_changes_and_missing_cloud_files_before_large_current_files(self):
+        start = (datetime.now() + timedelta(days=1)).replace(hour=22, minute=2, second=0, microsecond=0)
+        job = self.manager.config['folders'][1] | {'dailyTime': '22:02', 'dailyEndTime': '23:59'}
+        self.manager.save_config(self.manager.config | {'verifyUploads': False, 'uploadWorkers': 1, 'folders': [job]})
+        large = self.daily / 'large.bin'
+        changed = self.daily / 'changed.txt'
+        missing = self.daily / 'missing.txt'
+        large.write_bytes(b'a' * 16384)
+        changed.write_bytes(b'old')
+        missing.write_bytes(b'only here')
+        self.manager.sync()
+        changed.write_bytes(b'new version')
+        (self.daily / 'new.txt').write_bytes(b'new')
+        self.cloud.objects.pop(next(item['id'] for item in self.cloud.objects.values() if item['name'] == missing.name))
+        sent = []
+        original = self.cloud.upload
+        def send(path, name, parent, **options):
+            sent.append(name)
+            return original(path, name, parent, **options)
+        self.manager.folder_schedules[self.daily_id] = start.timestamp()
+        with patch('hamrahi_backup.engine.time.time', return_value=start.timestamp()), \
+                patch.object(self.cloud, 'upload', side_effect=send):
+            self.manager.scheduler_tick()
+            self.wait()
+        self.assertCountEqual(sent, ['changed.txt', 'new.txt', 'missing.txt'])
+        self.assertIn(b'new version', self.payloads())
+        result = self.manager.state['lastResult']
+        self.assertTrue(result['ok'])
+        self.assertEqual([Path(sample['path']).name for sample in result['samples']][:3], sent)
+
+    def test_nightly_reports_and_file_details_survive_frequent_instant_runs_and_restart(self):
+        for number in range(4):
+            run = format(number, '032x')
+            self.manager.record_item(run, self.daily / 'daily.txt', 'deferred', 1)
+            self.manager.finish_result({'id': run, 'trigger': 'daily', 'errors': [], 'windowEnded': True})
+        for number in range(4, 38):
+            self.manager.finish_result({'id': format(number, '032x'), 'trigger': 'schedule', 'errors': []})
+        self.manager.close()
+        self.manager = BackupManager(self.base, self.cloud)
+        nightly = [entry['id'] for entry in self.manager.public()['history'] if entry['trigger'] == 'daily']
+        self.assertEqual(nightly, [format(number, '032x') for number in (3, 2, 1)])
+        self.assertEqual(self.manager.items({'run': nightly[-1]})['total'], 1)
 
     def test_daily_window_supports_overnight_and_daytime_ranges(self):
         overnight = self.manager.config['folders'][1] | {'dailyTime': '20:00', 'dailyEndTime': '08:00'}

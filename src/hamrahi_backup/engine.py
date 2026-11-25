@@ -620,7 +620,7 @@ class BackupManager:
             db.execute('CREATE TABLE IF NOT EXISTS folder_schedules (job TEXT PRIMARY KEY, daily_time TEXT, next_run REAL)')
         self.configure_folder_schedules()
         try:
-            self.history = json.loads((self.state_dir / 'history.json').read_text('utf-8'))[:30]
+            self.history = self.retain_history(json.loads((self.state_dir / 'history.json').read_text('utf-8')))
             if self.history:
                 self.state['lastResult'] = self.history[0]
         except (OSError, ValueError):
@@ -952,13 +952,18 @@ class BackupManager:
             raise BackupError('فایل در پوشه‌های فعال و مجاز موجود نیست.', 403)
         return path.resolve()
 
+    @staticmethod
+    def retain_history(history):
+        daily_ids = [entry.get('id') for entry in history if entry.get('trigger') == 'daily'][:3]
+        return [entry for index, entry in enumerate(history) if index < 30 or entry.get('id') in daily_ids]
+
     def finish_result(self, result):
         result['completedAt'] = now()
         result['ok'] = not result['errors'] and not result.get('windowEnded', False)
         with self.lock:
             self.history = [h for h in self.history if h.get('id') != result['id']]
             self.history.insert(0, result)
-            self.history = self.history[:30]
+            self.history = self.retain_history(self.history)
             atomic_json(self.state_dir / 'history.json', self.history)
             self.state.update(lastResult=result, errors=result['errors'])
             (self.state_dir / 'active-run.json').unlink(missing_ok=True)
@@ -1240,7 +1245,8 @@ class BackupManager:
         if self.active_window_end is not None and time.time() >= self.active_window_end:
             raise SyncWindowEnded()
 
-    def walk(self, root, config, errors, skips, on_error=None, only_paths=None, empty_directories=None):
+    def walk(self, root, config, errors, skips, on_error=None, only_paths=None, empty_directories=None,
+             metadata=None):
         def failure(path, message):
             errors.append(message)
             if on_error:
@@ -1280,6 +1286,8 @@ class BackupManager:
                         elif time.time() - info.st_mtime < config['settleSeconds']:
                             failure(path, 'فایل اخیراً تغییر کرده؛ در نوبت بعد دوباره بررسی می‌شود: ' + str(path))
                         else:
+                            if metadata is not None:
+                                metadata[path] = (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
                             yield path
                 except OSError:
                     failure(path, 'دسترسی به فایل ممکن نیست: ' + str(path))
@@ -1386,6 +1394,7 @@ class BackupManager:
         jobs = []
         source_identities = {}
         scanned_files = 0
+        prioritize_transfers = result['trigger'] == 'daily' and not preview and not only_paths
         for job in folders:
             root, skips, empty_directories = Path(job['path']), [], []
             scan_errors_before = len(result['errors'])
@@ -1399,11 +1408,11 @@ class BackupManager:
             def scan_error(path, message):
                 self.record_item(run, path, 'error', self.file_size(path), error=message)
                 self.update(errors=list(result['errors']))
-            paths, queued, sizes = [], [], {}
-            for path in self.walk(root, config, result['errors'], skips, scan_error, only_paths, empty_directories):
+            paths, queued, metadata = [], [], {}
+            for path in self.walk(root, config, result['errors'], skips, scan_error, only_paths, empty_directories,
+                                  metadata=metadata):
                 paths.append(path)
-                sizes[path] = self.file_size(path)
-                queued.append((run, str(path), 'queued', sizes[path], '', None))
+                queued.append((run, str(path), 'queued', metadata[path][0], '', None))
                 scanned_files += 1
                 if len(queued) >= 256:
                     with self.db() as db:
@@ -1413,9 +1422,10 @@ class BackupManager:
             with self.db() as db:
                 db.executemany('INSERT OR REPLACE INTO run_items VALUES (?,?,?,?,?,?)', queued)
             result['excluded'] += len(skips)
-            paths.sort(key=lambda path: -sizes[path])
-            jobs.append((job, paths, len(skips), empty_directories, len(result['errors']) > scan_errors_before))
-        if only_paths and not any(paths for _, paths, _, _, _ in jobs) and not result['errors']:
+            paths.sort(key=lambda path: -metadata[path][0])
+            jobs.append((job, paths, len(skips), empty_directories, len(result['errors']) > scan_errors_before,
+                         metadata if prioritize_transfers else None, sum(info[0] for info in metadata.values())))
+        if only_paths and not any(paths for _, paths, *_ in jobs) and not result['errors']:
             raise BackupError('فایل انتخابی پیش از تلاش مجدد حذف یا جابه‌جا شده است.')
         self.step('scan', 'error' if result['errors'] else 'ok')
         self.step('transfer')
@@ -1427,34 +1437,38 @@ class BackupManager:
         with self.db(), tempfile.TemporaryDirectory(prefix='staging-', dir=self.state_dir) as staging:
             staged = Path(staging) / 'file'
             manifests = []
-            for job, paths, excluded_count, empty_directories, scan_failed in jobs:
+            for job, paths, excluded_count, empty_directories, scan_failed, metadata, local_bytes in jobs:
                 job_errors_before = len(result['errors'])
                 if paths and not preview and not only_paths and hasattr(self.client, 'list_tree'):
                     self.update(phase='دریافت یکجای فهرست پوشهٔ ابری', current=job['path'])
                     layout.prime(layout.parent(job, Path('inventory')))
                 live_summary = None
+                cloud_by_path = {}
                 if not preview and not only_paths:
                     from .audit import config_stamp, local_usage, volume_stamp
                     self.update(phase='اندازه‌گیری حجم کل پوشه', current=job['path'], fileStage=None)
-                    cloud_items = []
-                    pending_folders = [layout.parent(job, Path('inventory'))]
+                    cloud_bytes = cloud_files = 0
+                    pending_folders = [(layout.parent(job, Path('inventory')), '')]
                     seen_folders = set()
                     while pending_folders:
                         self.cancelled()
-                        folder_id = pending_folders.pop()
+                        folder_id, prefix = pending_folders.pop()
                         if folder_id in seen_folders:
                             raise BackupError('ساختار پوشهٔ ابری چرخه دارد.', 503)
                         seen_folders.add(folder_id)
-                        for item in layout.listing(folder_id).values():
+                        for name, item in layout.listing(folder_id).items():
                             if item.get('key'):
-                                cloud_items.append(item)
+                                cloud_bytes += item['size']
+                                cloud_files += 1
+                                if metadata is not None:
+                                    cloud_by_path[prefix + name] = (item['id'], item['size'])
                             else:
-                                pending_folders.append(item['id'])
+                                pending_folders.append((item['id'], prefix + name + '/'))
                     live_summary = dict(local_usage(self, Path(job['path'])),
                         run=run, checkedAt=now(), measuredAt=time.time_ns(), configStamp=config_stamp(config),
                         volumeStamp=volume_stamp(config),
-                        localBytes=sum(self.file_size(path) for path in paths), localFiles=len(paths),
-                        cloudBytes=sum(item['size'] for item in cloud_items), cloudFiles=len(cloud_items),
+                        localBytes=local_bytes, localFiles=len(paths),
+                        cloudBytes=cloud_bytes, cloudFiles=cloud_files,
                         excluded=excluded_count, complete=False, issues=0, verifiedFiles=0,
                         assurance='size-and-identity', inProgress=True)
                     self.publish_volume(job['id'], live_summary, force=True)
@@ -1474,6 +1488,18 @@ class BackupManager:
                         'SELECT rel,sha,remote_id,remote_name,size FROM files WHERE job=?', (job['id'],))}
                     fingerprints = {row[0]: row[1:] for row in db.execute(
                         'SELECT rel,size,mtime,ctime,inode,sqlite_file FROM source_fingerprints WHERE job=?', (job['id'],))}
+                if metadata is not None:
+                    self.update(phase='اولویت‌بندی فایل‌های تازه و تغییرکرده', current=job['path'])
+                    def appears_current(path):
+                        self.cancelled()
+                        relative = path.relative_to(root).as_posix()
+                        previous = fingerprints.get(relative)
+                        indexed_file = indexed.get(relative)
+                        return bool(previous and not previous[4] and previous[:3] == metadata[path]
+                                    and indexed_file and indexed_file[2] == path.name
+                                    and cloud_by_path.get(relative) == (indexed_file[1], indexed_file[3]))
+                    paths.sort(key=appears_current)
+                    cloud_by_path.clear()
                 unchanged_records = []
                 fingerprint_records = []
                 def flush_unchanged():

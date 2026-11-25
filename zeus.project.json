@@ -2,7 +2,7 @@
   "name": "abre-hamrahi-api",
   "owner": "internal",
   "kind": "local-backup-panel",
-  "description": "Windows and Android folder sync with instant or daily schedules, guarded cloud trash, live account quota, resumable queue, tray controls and quiet startup. Windows daily runs distinguish unfinished work from file errors when the window ends.",
+  "description": "Windows and Android folder sync with instant or daily schedules, guarded cloud trash, live account quota, resumable queue, tray controls and quiet startup. Windows daily runs prioritize files needing transfer and keep recent nightly reports.",
   "entrypoints": [
     "src/hamrahi_backup/cli.py",
     "src/hamrahi_backup/server.py",

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.9 - 2026-11-25
+
+- Windows daily sync processes new, changed or potentially missing files before likely unchanged files within the same time window.
+- Keep three daily runs and their file details available even when hourly runs fill the recent history.
+- Android build is versioned alongside Windows; its sync logic is unchanged.
+
 ## 1.7.8 - 2026-11-22
 
 - Windows daily runs can reuse unchanged file fingerprints when the current cloud ID and size still match and full verification is off.
